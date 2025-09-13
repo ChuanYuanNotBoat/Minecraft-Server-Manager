@@ -1,0 +1,15 @@
+# Minecraft Server Manager 依赖项
+# 此项目主要使用标准库，但列出可能需要的依赖以备未来扩展
+
+# 标准库依赖（不需要安装，仅作记录）
+# os, json, socket, struct, time, select, sys, threading
+# signal, re, datetime, queue, collections, uuid
+
+# 未来可能需要的第三方库
+# colorama==0.4.6  # 跨平台终端颜色支持
+# requests==2.31.0  # HTTP请求库（未来Web界面或API功能）
+# flask==2.3.3  # Web框架（未来Web界面功能）
+# ping3==4.0.4  # 纯Python ping实现（备选）
+# mcstatus==11.1.0  # Minecraft服务器状态查询库（备选）
+
+# 当前无额外依赖

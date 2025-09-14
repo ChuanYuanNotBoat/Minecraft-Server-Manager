@@ -1380,90 +1380,100 @@ class ServerManager:
         input(f"{Colors.CYAN}按回车键返回主菜单...{Colors.RESET}")
 
     def chat_server(self, index):
-        """连接到指定服务器的聊天"""
-        if index < 0 or index >= len(self.servers):
-            print(f"{Colors.RED}无效的服务器序号{Colors.RESET}")
-            return False
+      """连接到指定服务器的聊天"""
+      if index < 0 or index >= len(self.servers):
+        print(f"{Colors.RED}无效的服务器序号{Colors.RESET}")
+        return False
 
-        if not SERVER_INFO_AVAILABLE:
-            print(f"{Colors.RED}聊天功能需要server_info模块，但未找到{Colors.RESET}")
-            return False
+      if not SERVER_INFO_AVAILABLE:
+        print(f"{Colors.RED}聊天功能需要server_info模块，但未找到{Colors.RESET}")
+        return False
 
-        server = self.servers[index]
-        server_type = server.get('type', 'java')
-        port = server.get('port', 25565 if server_type == 'java' else 19132)
+      server = self.servers[index]
+      server_type = server.get('type', 'java')
+      port = server.get('port', 25565 if server_type == 'java' else 19132)
 
-        if server_type != 'java':
-            print(f"{Colors.RED}只有Java版服务器支持聊天功能{Colors.RESET}")
-            return False
+      if server_type != 'java':
+        print(f"{Colors.RED}只有Java版服务器支持聊天功能{Colors.RESET}")
+        return False
 
-        print(f"{Colors.CYAN}正在连接到 {server['name']} 的聊天...{Colors.RESET}")
+      print(f"{Colors.CYAN}正在连接到 {server['name']} 的聊天...{Colors.RESET}")
 
-        # 获取聊天用户名
-        username = server.get('chat_username', f"Player{random.randint(1000, 9999)}")
-        print(f"{Colors.CYAN}使用用户名: {username}{Colors.RESET}")
+      # 获取聊天用户名
+      username = server.get('chat_username', f"Player{random.randint(1000, 9999)}")
+      print(f"{Colors.CYAN}使用用户名: {username}{Colors.RESET}")
 
-        # 先尝试获取服务器版本信息
-        print(f"{Colors.CYAN}正在检测服务器版本...{Colors.RESET}")
-        try:
-            result = MinecraftPing.ping(server['ip'], port, timeout=5, server_type="java")
-            if 'error' in result:
-                print(f"{Colors.YELLOW}无法检测服务器版本，使用默认版本{Colors.RESET}")
-                server_version = None
-            else:
-                server_version = result.get('version', {}).get('name', None)
-                if server_version:
-                    print(f"{Colors.GREEN}检测到服务器版本: {server_version}{Colors.RESET}")
-                else:
-                    print(f"{Colors.YELLOW}无法获取服务器版本，使用默认版本{Colors.RESET}")
-                    server_version = None
-        except Exception as e:
-            print(f"{Colors.YELLOW}版本检测失败: {str(e)}{Colors.RESET}")
+      # 先尝试获取服务器版本信息
+      print(f"{Colors.CYAN}正在检测服务器版本...{Colors.RESET}")
+      try:
+        result = MinecraftPing.ping(server['ip'], port, timeout=5, server_type="java")
+        if 'error' in result:
+          print(f"{Colors.YELLOW}无法检测服务器版本，使用默认版本{Colors.RESET}")
+          server_version = None
+        else:
+          server_version = result.get('version', {}).get('name', None)
+          if server_version:
+            print(f"{Colors.GREEN}检测到服务器版本: {server_version}{Colors.RESET}")
+          else:
+            print(f"{Colors.YELLOW}无法获取服务器版本，使用默认版本{Colors.RESET}")
             server_version = None
+      except Exception as e:
+        print(f"{Colors.YELLOW}版本检测失败: {str(e)}{Colors.RESET}")
+        server_version = None
 
-        # 创建聊天客户端
-        global global_chat_client
-        try:
-            chat_client = MinecraftChatClient(server['ip'], port, username, server_version)
-            chat_client.set_server_name(server['name'])
+      # 创建聊天客户端
+      global global_chat_client
+      try:
+        # 获取服务器的mod列表
+        forge_mods = server.get('mod_list', [])
 
-            # 设置消息回调
-            def chat_callback(sender, message):
-                timestamp = datetime.now().strftime("%H:%M:%S")
-                print(f"{Colors.CYAN}[{timestamp}] {Colors.GREEN}{sender}:{Colors.RESET} {message}")
+        # 添加调试信息
+        print(f"{Colors.CYAN}创建聊天客户端实例...{Colors.RESET}")
+        chat_client = MinecraftChatClient(server['ip'], port, username, server_version)
+        chat_client.set_server_name(server['name'])
 
-            chat_client.set_chat_callback(chat_callback)
+        # 设置Forge mod列表
+        if forge_mods:
+          chat_client.set_forge_mods(forge_mods)
+          print(f"{Colors.GREEN}检测到Forge服务器，已加载 {len(forge_mods)} 个Mod{Colors.RESET}")
 
-            # 连接到服务器
-            if chat_client.start_listening():
-                global_chat_client = chat_client
-                print(f"{Colors.GREEN}已连接到聊天，输入消息发送，输入 '/quit' 退出聊天{Colors.RESET}")
+        # 设置消息回调
+        def chat_callback(sender, message):
+          timestamp = datetime.now().strftime("%H:%M:%S")
+          print(f"{Colors.CYAN}[{timestamp}] {Colors.GREEN}{sender}:{Colors.RESET} {message}")
 
-                # 聊天循环
-                while True:
-                    try:
-                        message = input().strip()
-                        if message.lower() == '/quit':
-                            break
-                        if message:
-                            chat_client.send_chat_message(message)
-                    except KeyboardInterrupt:
-                        print(f"\n{Colors.YELLOW}退出聊天{Colors.RESET}")
-                        break
+        chat_client.set_chat_callback(chat_callback)
 
-                # 断开连接
-                chat_client.stop()
-                global_chat_client = None
-                print(f"{Colors.GREEN}已断开聊天连接{Colors.RESET}")
-            else:
-                print(f"{Colors.RED}连接聊天失败{Colors.RESET}")
-                return False
+        # 连接到服务器
+        if chat_client.start_listening():
+          global_chat_client = chat_client
+          print(f"{Colors.GREEN}已连接到聊天，输入消息发送，输入 '/quit' 退出聊天{Colors.RESET}")
 
-        except Exception as e:
-            print(f"{Colors.RED}聊天连接错误: {str(e)}{Colors.RESET}")
-            return False
+          # 聊天循环
+          while True:
+            try:
+              message = input().strip()
+              if message.lower() == '/quit':
+                break
+              if message:
+                chat_client.send_chat_message(message)
+            except KeyboardInterrupt:
+              print(f"\n{Colors.YELLOW}退出聊天{Colors.RESET}")
+              break
 
-        return True
+          # 断开连接
+          chat_client.stop()
+          global_chat_client = None
+          print(f"{Colors.GREEN}已断开聊天连接{Colors.RESET}")
+        else:
+          print(f"{Colors.RED}连接聊天失败{Colors.RESET}")
+          return False
+
+      except Exception as e:
+        print(f"{Colors.RED}聊天连接错误: {str(e)}{Colors.RESET}")
+        return False
+
+      return True
 
 def print_help():
     """打印帮助信息"""
@@ -1499,23 +1509,20 @@ def print_help():
     # 等待用户按回车继续
     input(f"\n{Colors.CYAN}按回车键继续...{Colors.RESET}")
 
-
 def sigint_handler(signum, frame):
-  """处理 Ctrl+C 信号"""
-  global global_cancel_query
-  global global_chat_client
+    """处理 Ctrl+C 信号"""
+    global global_cancel_query
+    global global_chat_client
 
-  # 如果正在聊天，退出聊天
-  if global_chat_client:
-    global_chat_client.stop()
-    global_chat_client = None
-    print(f"\n{Colors.YELLOW}已退出聊天模式{Colors.RESET}")
-    return
+    # 如果正在聊天，退出聊天
+    if global_chat_client:
+        global_chat_client.stop()
+        global_chat_client = None
+        print(f"\n{Colors.YELLOW}已退出聊天模式{Colors.RESET}")
+        return
 
-  global_cancel_query = True
-  print(f"\n{Colors.YELLOW}正在取消查询...{Colors.RESET}")
-  # 设置一个标志，让程序知道需要退出
-  sys.exit(0)  # 直接退出程序
+    global_cancel_query = True
+    print(f"\n{Colors.YELLOW}正在取消查询...{Colors.RESET}")
 
 def main():
     # 设置信号处理

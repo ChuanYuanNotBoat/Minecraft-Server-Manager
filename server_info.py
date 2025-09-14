@@ -687,69 +687,71 @@ class MinecraftLogin:
         self.mods_list = []  # 添加Mod列表
         self.is_forge = False  # 是否为Forge服务器
 
-        def set_mods_list(self, mods_list):
-          """设置Mod列表"""
-          self.mods_list = mods_list
-          self.is_forge = len(mods_list) > 2  # 如果除了minecraft和forge外还有其他mod，则认为是Forge服务器
-        # 创建mods配置目录
-        self.mods_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mods_config")
-        if not os.path.exists(self.mods_dir):
-            os.makedirs(self.mods_dir)
+    def set_mods_list(self, mods_list):
+      self.mods_list = mods_list
+      # 如果除了minecraft和forge外还有其他mod，则认为是Forge服务器
+      self.is_forge = len(mods_list) > 2
 
-        # 服务器标识符（用于文件名）
-        self.server_id = f"{host}_{port}".replace(".", "_").replace(":", "_")
-        self.mods_config_file = os.path.join(self.mods_dir, f"{self.server_id}.json")
+      # 创建mods配置目录
+      self.mods_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mods_config")
+      if not os.path.exists(self.mods_dir):
+        os.makedirs(self.mods_dir)
 
-        # 尝试加载现有的mod配置
-        self.forge_mods = self._load_mods_config()
+      # 服务器标识符（用于文件名）
+      self.server_id = f"{self.host}_{self.port}".replace(".", "_").replace(":", "_")
+      self.mods_config_file = os.path.join(self.mods_dir, f"{self.server_id}.json")
 
-        if DEBUG_MODE:
-            print(f"[DEBUG] 初始化Minecraft登录: {host}:{port}, 用户: {username}")
+      # 尝试加载现有的mod配置
+      self.forge_mods = self._load_mods_config()
+
+      if self.DEBUG_MODE:
+        print(f"[DEBUG] 初始化Minecraft登录: {self.host}:{self.port}, 用户: {self.username}")
+
     def _send_handshake(self):
-        """发送握手包"""
-        if DEBUG_MODE:
-            print(f"[DEBUG] 发送握手包")
+      """发送握手包"""
+      if DEBUG_MODE:
+        print(f"[DEBUG] 发送握手包")
 
-        packet = bytearray()
+      packet = bytearray()
 
-        # 包ID (握手)
-        packet.extend(MinecraftQuery._pack_varint(0))
+      # 包ID (握手)
+      packet.extend(MinecraftQuery._pack_varint(0))
 
-        # 协议版本
-        packet.extend(MinecraftQuery._pack_varint(self.protocol_version))
+      # 协议版本
+      packet.extend(MinecraftQuery._pack_varint(self.protocol_version))
 
-        # 服务器地址
-        packet.extend(MinecraftQuery._pack_string(self.host))
+      # 服务器地址
+      packet.extend(MinecraftQuery._pack_string(self.host))
 
-        # 服务器端口
-        packet.extend(struct.pack('>H', self.port))
+      # 服务器端口
+      packet.extend(struct.pack('>H', self.port))
 
-        # 下一状态 (2 for login)
-        packet.extend(MinecraftQuery._pack_varint(2))
+      # 下一状态 (2 for login)
+      packet.extend(MinecraftQuery._pack_varint(2))
 
-        # 如果是Forge服务器，添加Forge特定的数据
-        if self.is_forge and self.mods_list:
-            # Forge握手数据
-            forge_data = bytearray()
+      # 如果是Forge服务器，添加Forge特定的数据
+      if hasattr(self, 'forge_mods') and self.forge_mods:  # 修改这里：添加属性存在性检查
+        # Forge握手数据
+        forge_data = bytearray()
 
-            # FML|HS标记
-            forge_data.extend(MinecraftQuery._pack_string("FML|HS"))
+        # FML|HS标记
+        forge_data.extend(MinecraftQuery._pack_string("FML|HS"))
 
-            # Forge版本信息
-            forge_data.extend(MinecraftQuery._pack_string("FML"))
-            forge_data.extend(MinecraftQuery._pack_varint(3))  # 协议版本
-            forge_data.extend(MinecraftQuery._pack_varint(len(self.mods_list)))  # mod数量
+        # Forge版本信息
+        forge_data.extend(MinecraftQuery._pack_string("FML"))
+        forge_data.extend(MinecraftQuery._pack_varint(3))  # 协议版本
+        forge_data.extend(MinecraftQuery._pack_varint(len(self.forge_mods)))  # mod数量
 
-            # 添加每个mod的信息
-            for mod in self.mods_list:
-                forge_data.extend(MinecraftQuery._pack_string(mod.get("modid", "unknown")))
-                forge_data.extend(MinecraftQuery._pack_string(mod.get("version", "unknown")))
+        # 添加每个mod的信息
+        for mod in self.forge_mods:
+          forge_data.extend(MinecraftQuery._pack_string(mod["modid"]))
+          forge_data.extend(MinecraftQuery._pack_string(mod["version"]))
 
-            # 将Forge数据添加到握手包
-            packet.extend(forge_data)
+        # 将Forge数据添加到握手包
+        packet.extend(forge_data)
 
-        # 发送包
-        self._send_packet(packet)
+      # 发送包
+      self._send_packet(packet)
 
     def _load_mods_config(self):
         """加载现有的mod配置"""
@@ -1055,57 +1057,74 @@ class MinecraftLogin:
 
         return data
 
+    # 在server_info.py中的MinecraftChatClient类的login方法中添加以下处理逻辑
+
     def login(self):
-        """执行登录流程"""
-        if DEBUG_MODE:
-            print(f"[DEBUG] 开始登录流程")
+      """执行登录流程"""
+      if DEBUG_MODE:
+        print(f"[DEBUG] 开始登录流程")
 
-        try:
-            self.connect()
+      try:
+        self.connect()
 
-            # 处理登录响应
-            while True:
-                packet = self.receive_packet()
-                if packet is None:
-                    break
+        # 处理登录响应
+        while True:
+          packet = self.receive_packet()
+          if packet is None:
+            break
 
-                # 解析包ID
-                packet_id = MinecraftQuery._read_varint_from_bytes(packet)[0]
-                offset = len(MinecraftQuery._pack_varint(packet_id))
+          # 解析包ID
+          packet_id = MinecraftQuery._read_varint_from_bytes(packet)[0]
+          offset = len(MinecraftQuery._pack_varint(packet_id))
 
-                # 根据包ID处理
-                if packet_id == 0x03:  # Set Compression
-                    self.compression_threshold = MinecraftQuery._read_varint_from_bytes(packet[offset:])[0]
-                    if DEBUG_MODE:
-                        print(f"[DEBUG] 压缩阈值设置为: {self.compression_threshold}")
-
-                elif packet_id == 0x02:  # Login Success
-                    uuid = MinecraftQuery._read_string_from_bytes(packet[offset:])
-                    offset += len(uuid) + 2
-                    username = MinecraftQuery._read_string_from_bytes(packet[offset:])
-                    if DEBUG_MODE:
-                        print(f"[DEBUG] 登录成功: {username} ({uuid})")
-                    return True
-
-                elif packet_id == 0x01:  # Encryption Request
-                    if DEBUG_MODE:
-                        print(f"[DEBUG] 服务器要求加密，当前不支持")
-                    return False
-
-                elif packet_id == 0x00:  # Disconnect
-                    reason = packet[offset:].decode('utf-8', errors='ignore')
-                    if DEBUG_MODE:
-                        print(f"[DEBUG] 服务器断开连接: {reason}")
-                    return False
-
-            return False
-        except Exception as e:
+          # 根据包ID处理
+          if packet_id == 0x03:  # Set Compression
+            self.compression_threshold = MinecraftQuery._read_varint_from_bytes(packet[offset:])[0]
             if DEBUG_MODE:
-                print(f"[DEBUG] 登录过程中发生错误: {e}")
+              print(f"[DEBUG] 压缩阈值设置为: {self.compression_threshold}")
+
+          elif packet_id == 0x02:  # Login Success
+            uuid = MinecraftQuery._read_string_from_bytes(packet[offset:])
+            offset += len(uuid) + 2
+            username = MinecraftQuery._read_string_from_bytes(packet[offset:])
+            if DEBUG_MODE:
+              print(f"[DEBUG] 登录成功: {username} ({uuid})")
+            return True
+
+          elif packet_id == 0x01:  # Encryption Request
+            if DEBUG_MODE:
+              print(f"[DEBUG] 服务器要求加密，当前不支持")
             return False
-        finally:
-            if self.socket:
-                self.socket.close()
+
+          elif packet_id == 0x00:  # Disconnect
+            reason = packet[offset:].decode('utf-8', errors='ignore')
+            if DEBUG_MODE:
+              print(f"[DEBUG] 服务器断开连接: {reason}")
+            return False
+
+          elif packet_id == 0x04:  # Login Plugin Request (Forge相关)
+            if DEBUG_MODE:
+              print(f"[DEBUG] 收到Login Plugin Request，发送空响应")
+            # 读取消息ID
+            message_id = MinecraftQuery._read_varint_from_bytes(packet[offset:])[0]
+            # 发送空的Login Plugin Response
+            response = bytearray()
+            response.extend(MinecraftQuery._pack_varint(0x02))  # 包ID
+            response.extend(MinecraftQuery._pack_varint(message_id))  # 相同的消息ID
+            response.extend(b'\x00')  # 成功标志 + 无数据
+            self._send_packet(response)
+
+          # 添加对其他可能包的处理
+          else:
+            if DEBUG_MODE:
+              print(f"[DEBUG] 收到未知包ID: {packet_id}，长度: {len(packet)}")
+            # 对于未知包，继续处理，不立即断开
+
+        return False
+      except Exception as e:
+        if DEBUG_MODE:
+          print(f"[DEBUG] 登录过程中发生错误: {e}")
+        return False
 
     @staticmethod
     def _read_string_from_bytes(data):
@@ -1290,29 +1309,50 @@ class MinecraftChatClient:
         self._send_login_start()
 
     def _send_handshake(self):
-        """发送握手包"""
-        if DEBUG_MODE:
-            print(f"[DEBUG] 发送握手包")
+      """发送握手包"""
+      if DEBUG_MODE:
+        print(f"[DEBUG] 发送握手包")
 
-        packet = bytearray()
+      packet = bytearray()
 
-        # 包ID (握手)
-        packet.extend(MinecraftQuery._pack_varint(0))
+      # 包ID (握手)
+      packet.extend(MinecraftQuery._pack_varint(0))
 
-        # 协议版本
-        packet.extend(MinecraftQuery._pack_varint(self.protocol_version))
+      # 协议版本
+      packet.extend(MinecraftQuery._pack_varint(self.protocol_version))
 
-        # 服务器地址
-        packet.extend(MinecraftQuery._pack_string(self.host))
+      # 服务器地址
+      packet.extend(MinecraftQuery._pack_string(self.host))
 
-        # 服务器端口
-        packet.extend(struct.pack('>H', self.port))
+      # 服务器端口
+      packet.extend(struct.pack('>H', self.port))
 
-        # 下一状态 (2 for login)
-        packet.extend(MinecraftQuery._pack_varint(2))
+      # 下一状态 (2 for login)
+      packet.extend(MinecraftQuery._pack_varint(2))
 
-        # 发送包
-        self._send_packet(packet)
+      # 如果是Forge服务器，添加Forge特定的数据
+      if hasattr(self, 'forge_mods') and self.forge_mods:
+        # Forge握手数据
+        forge_data = bytearray()
+
+        # FML|HS标记
+        forge_data.extend(MinecraftQuery._pack_string("FML|HS"))
+
+        # Forge版本信息
+        forge_data.extend(MinecraftQuery._pack_string("FML"))
+        forge_data.extend(MinecraftQuery._pack_varint(3))  # 协议版本
+        forge_data.extend(MinecraftQuery._pack_varint(len(self.forge_mods)))  # mod数量
+
+        # 添加每个mod的信息
+        for mod in self.forge_mods:
+          forge_data.extend(MinecraftQuery._pack_string(mod["modid"]))
+          forge_data.extend(MinecraftQuery._pack_string(mod["version"]))
+
+        # 将Forge数据添加到握手包
+        packet.extend(forge_data)
+
+      # 发送包
+      self._send_packet(packet)
 
     def _send_login_start(self):
         """发送登录开始包"""
@@ -1564,6 +1604,183 @@ class MinecraftChatClient:
         # 关闭连接
         if self.socket:
             self.socket.close()
+
+    # 在MinecraftChatClient类中添加以下方法
+
+    def _send_forge_handshake(self, packet):
+      """添加Forge握手数据到握手包"""
+      if DEBUG_MODE:
+        print(f"[DEBUG] 添加Forge握手数据")
+
+      # FML|HS标记
+      packet.extend(MinecraftQuery._pack_string("FML|HS"))
+
+      # Forge版本信息
+      packet.extend(MinecraftQuery._pack_string("FML"))
+      packet.extend(MinecraftQuery._pack_varint(3))  # 协议版本
+
+      # 添加mod数量
+      mod_count = len(self.forge_mods) if hasattr(self, 'forge_mods') and self.forge_mods else 0
+      packet.extend(MinecraftQuery._pack_varint(mod_count))
+
+      # 添加每个mod的信息
+      if mod_count > 0:
+        for mod in self.forge_mods:
+          packet.extend(MinecraftQuery._pack_string(mod.get("modid", "unknown")))
+          packet.extend(MinecraftQuery._pack_string(mod.get("version", "unknown")))
+
+      return packet
+
+    def _handle_forge_handshake(self, packet_data):
+      """处理Forge握手响应"""
+      if DEBUG_MODE:
+        print(f"[DEBUG] 处理Forge握手响应")
+
+      try:
+        # 解析Forge响应
+        offset = 0
+
+        # 读取FML标记
+        fml_marker, varint_len = MinecraftQuery._read_varint_from_bytes(packet_data[offset:])
+        offset += varint_len
+        fml_marker_str = packet_data[offset:offset + fml_marker].decode('utf-8', errors='ignore')
+        offset += fml_marker
+
+        if fml_marker_str == "FML":
+          # 读取协议版本
+          protocol_version, varint_len = MinecraftQuery._read_varint_from_bytes(packet_data[offset:])
+          offset += varint_len
+
+          if DEBUG_MODE:
+            print(f"[DEBUG] Forge协议版本: {protocol_version}")
+
+          # 这里可以添加更多的Forge响应处理逻辑
+          return True
+      except Exception as e:
+        if DEBUG_MODE:
+          print(f"[DEBUG] 处理Forge握手响应失败: {e}")
+
+      return False
+
+    # 修改_send_handshake方法
+    def _send_handshake(self):
+      """发送握手包（增强Forge兼容性）"""
+      if DEBUG_MODE:
+        print(f"[DEBUG] 发送增强版握手包")
+
+      packet = bytearray()
+
+      # 包ID (握手)
+      packet.extend(MinecraftQuery._pack_varint(0))
+
+      # 协议版本
+      packet.extend(MinecraftQuery._pack_varint(self.protocol_version))
+
+      # 服务器地址
+      packet.extend(MinecraftQuery._pack_string(self.host))
+
+      # 服务器端口
+      packet.extend(struct.pack('>H', self.port))
+
+      # 下一状态 (2 for login)
+      packet.extend(MinecraftQuery._pack_varint(2))
+
+      # 如果是Forge服务器，添加Forge特定的数据
+      if hasattr(self, 'forge_mods') and self.forge_mods:
+        packet = self._send_forge_handshake(packet)
+
+      # 发送包
+      self._send_packet(packet)
+
+    # 修改login方法中的包处理逻辑
+    def login(self):
+      """执行登录流程（增强Forge兼容性）"""
+      if DEBUG_MODE:
+        print(f"[DEBUG] 开始增强版登录流程")
+
+      try:
+        self.connect()
+
+        # 处理登录响应
+        while True:
+          packet = self.receive_packet()
+          if packet is None:
+            break
+
+          # 解析包ID
+          packet_id = MinecraftQuery._read_varint_from_bytes(packet)[0]
+          offset = len(MinecraftQuery._pack_varint(packet_id))
+
+          # 根据包ID处理
+          if packet_id == 0x03:  # Set Compression
+            self.compression_threshold = MinecraftQuery._read_varint_from_bytes(packet[offset:])[0]
+            if DEBUG_MODE:
+              print(f"[DEBUG] 压缩阈值设置为: {self.compression_threshold}")
+
+          elif packet_id == 0x02:  # Login Success
+            uuid = MinecraftQuery._read_string_from_bytes(packet[offset:])
+            offset += len(uuid) + 2
+            username = MinecraftQuery._read_string_from_bytes(packet[offset:])
+            if DEBUG_MODE:
+              print(f"[DEBUG] 登录成功: {username} ({uuid})")
+            return True
+
+          elif packet_id == 0x01:  # Encryption Request
+            if DEBUG_MODE:
+              print(f"[DEBUG] 服务器要求加密，当前不支持")
+            return False
+
+          elif packet_id == 0x00:  # Disconnect
+            reason = packet[offset:].decode('utf-8', errors='ignore')
+            if DEBUG_MODE:
+              print(f"[DEBUG] 服务器断开连接: {reason}")
+            return False
+
+          elif packet_id == 0x04:  # Login Plugin Request (Forge相关)
+            if DEBUG_MODE:
+              print(f"[DEBUG] 收到Login Plugin Request，尝试处理Forge握手")
+
+            # 读取消息ID
+            message_id, varint_len = MinecraftQuery._read_varint_from_bytes(packet[offset:])
+            offset += varint_len
+
+            # 读取通道名称
+            channel_len, varint_len = MinecraftQuery._read_varint_from_bytes(packet[offset:])
+            offset += varint_len
+            channel = packet[offset:offset + channel_len].decode('utf-8', errors='ignore')
+            offset += channel_len
+
+            # 读取数据
+            data_len, varint_len = MinecraftQuery._read_varint_from_bytes(packet[offset:])
+            offset += varint_len
+            data = packet[offset:offset + data_len] if data_len > 0 else b''
+
+            if DEBUG_MODE:
+              print(f"[DEBUG] Login Plugin Request - 消息ID: {message_id}, 通道: {channel}, 数据长度: {data_len}")
+
+            # 处理Forge握手
+            if channel == "FML|HS":
+              self._handle_forge_handshake(data)
+
+            # 发送响应
+            response = bytearray()
+            response.extend(MinecraftQuery._pack_varint(0x02))  # 包ID
+            response.extend(MinecraftQuery._pack_varint(message_id))  # 相同的消息ID
+            response.extend(b'\x01')  # 成功标志
+            response.extend(MinecraftQuery._pack_varint(0))  # 无数据
+            self._send_packet(response)
+
+          # 添加对其他可能包的处理
+          else:
+            if DEBUG_MODE:
+              print(f"[DEBUG] 收到未知包ID: {packet_id}，长度: {len(packet)}")
+            # 对于未知包，继续处理，不立即断开
+
+        return False
+      except Exception as e:
+        if DEBUG_MODE:
+          print(f"[DEBUG] 登录过程中发生错误: {e}")
+        return False
 
 
 # 服务器信息查询接口类

@@ -830,74 +830,124 @@ class MinecraftLogin:
         return mods_list
 
     def _extract_mod_info(self, jar_path):
-        """从jar文件中提取mod信息"""
-        try:
-            with zipfile.ZipFile(jar_path, 'r') as jar:
-                # 尝试查找mods.toml (Forge 1.13+)
-                if 'META-INF/mods.toml' in jar.namelist():
-                    with jar.open('META-INF/mods.toml') as f:
-                        content = f.read().decode('utf-8', errors='ignore')
-                        return self._parse_mods_toml(content, os.path.basename(jar_path))
+      """从jar文件中提取mod信息"""
+      try:
+        with zipfile.ZipFile(jar_path, 'r') as jar:
+          # 首先尝试读取META-INF/mods.toml (Forge 1.13+)
+          if 'META-INF/mods.toml' in jar.namelist():
+            with jar.open('META-INF/mods.toml') as f:
+              content = f.read().decode('utf-8', errors='ignore')
+              mod_info = self._parse_mods_toml(content, os.path.basename(jar_path))
+              if mod_info and mod_info.get("version") != "unknown":
+                return mod_info
 
-                # 尝试查找mcmod.info (Forge 1.12-)
-                elif 'mcmod.info' in jar.namelist():
-                    with jar.open('mcmod.info') as f:
-                        content = f.read().decode('utf-8', errors='ignore')
-                        return self._parse_mcmod_info(content, os.path.basename(jar_path))
+          # 尝试读取mcmod.info (Forge 1.12-)
+          if 'mcmod.info' in jar.namelist():
+            with jar.open('mcmod.info') as f:
+              content = f.read().decode('utf-8', errors='ignore')
+              mod_info = self._parse_mcmod_info(content, os.path.basename(jar_path))
+              if mod_info and mod_info.get("version") != "unknown":
+                return mod_info
 
-                # 如果都没有，使用文件名作为modid
-                else:
-                    filename = os.path.basename(jar_path)
-                    modid = filename.replace('.jar', '')
-                    return {"modid": modid, "version": "unknown"}
+          # 尝试读取fabric.mod.json (Fabric)
+          if 'fabric.mod.json' in jar.namelist():
+            with jar.open('fabric.mod.json') as f:
+              content = f.read().decode('utf-8', errors='ignore')
+              mod_info = self._parse_fabric_mod_json(content, os.path.basename(jar_path))
+              if mod_info and mod_info.get("version") != "unknown":
+                return mod_info
 
-        except Exception as e:
-            if DEBUG_MODE:
-                print(f"[DEBUG] 解析mod文件失败 {jar_path}: {e}")
-            return None
+          # 如果以上方法都失败，尝试从文件名提取版本信息
+          filename = os.path.basename(jar_path)
+          return self._parse_mod_from_filename(filename)
 
+      except Exception as e:
+        if DEBUG_MODE:
+          print(f"[DEBUG] 解析mod文件失败 {jar_path}: {e}")
+        return None
+
+    def _extract_version_from_filename(self, filename):
+      """从文件名提取版本号"""
+      # 常见版本号模式
+      patterns = [
+        r'(\d+\.\d+(?:\.\d+)?(?:-.+)?)$',  # 1.2.3 或 1.2.3-alpha
+        r'[_-]v?(\d+(?:\.\d+)*(?:-.+)?)$',  # -v1.2.3 或 _1.2.3
+      ]
+
+      name = filename.replace('.jar', '')
+      for pattern in patterns:
+        match = re.search(pattern, name)
+        if match:
+          return match.group(1)
+
+      return "unknown"
     def _parse_mods_toml(self, content, filename):
-        """解析mods.toml文件"""
-        modid = None
-        version = None
+      """解析mods.toml文件"""
+      modid = None
+      version = None
+      display_name = None
 
-        # 简单的解析逻辑
-        lines = content.split('\n')
-        for i, line in enumerate(lines):
-            line = line.strip()
-            if line.startswith('modId='):
-                modid = line.split('=')[1].strip().strip('"')
-            elif line.startswith('version='):
-                version = line.split('=')[1].strip().strip('"')
+      # 更全面的解析逻辑
+      lines = content.split('\n')
+      in_mod_section = False
 
-            # 如果找到两个值，提前退出
-            if modid and version:
-                break
+      for line in lines:
+        line = line.strip()
 
-        # 如果解析失败，使用文件名
-        if not modid:
-            modid = filename.replace('.jar', '')
-        if not version:
-            version = "unknown"
+        # 检测mod部分开始
+        if line == "[[mods]]":
+          in_mod_section = True
+          continue
 
-        return {"modid": modid, "version": version}
+        # 只在mod部分内解析
+        if in_mod_section:
+          if line.startswith('modId='):
+            modid = line.split('=', 1)[1].strip().strip('"\'')
+          elif line.startswith('version='):
+            version = line.split('=', 1)[1].strip().strip('"\'')
+          elif line.startswith('displayName='):
+            display_name = line.split('=', 1)[1].strip().strip('"\'')
+          elif line.startswith('[') and not line.startswith('[[mods]]'):
+            # 新节开始，退出mod部分
+            break
+
+      # 如果解析失败，使用文件名
+      if not modid:
+        modid = filename.replace('.jar', '')
+      if not version or version == "${file.jarVersion}":
+        version = self._extract_version_from_filename(filename)
+
+      return {"modid": modid, "version": version, "display_name": display_name}
 
     def _parse_mcmod_info(self, content, filename):
-        """解析mcmod.info文件"""
-        try:
-            # 尝试解析JSON
-            data = json.loads(content)
-            if isinstance(data, list) and len(data) > 0:
-                mod_info = data[0]
-                return {
-                    "modid": mod_info.get("modid", filename.replace('.jar', '')),
-                    "version": mod_info.get("version", "unknown")
-                }
-        except:
-            pass
+      """解析mcmod.info文件"""
+      try:
+        # 尝试解析JSON
+        data = json.loads(content)
 
-        # 如果解析失败，使用文件名
-        return {"modid": filename.replace('.jar', ''), "version": "unknown"}
+        # 处理不同的JSON结构
+        if isinstance(data, list) and len(data) > 0:
+          # 旧格式: [{"modid": "...", "version": "...", ...}]
+          mod_info = data[0]
+          modid = mod_info.get("modid", filename.replace('.jar', ''))
+          version = mod_info.get("version", "unknown")
+        elif isinstance(data, dict):
+          # 新格式: {"modList": [{"modid": "...", "version": "...", ...}]}
+          if "modList" in data and isinstance(data["modList"], list) and len(data["modList"]) > 0:
+            mod_info = data["modList"][0]
+            modid = mod_info.get("modid", filename.replace('.jar', ''))
+            version = mod_info.get("version", "unknown")
+          else:
+            modid = filename.replace('.jar', '')
+            version = "unknown"
+        else:
+          modid = filename.replace('.jar', '')
+          version = "unknown"
+
+        return {"modid": modid, "version": version}
+      except:
+        # 如果解析失败，尝试从文件名提取
+        return self._parse_mod_from_filename(filename)
 
     def connect(self):
         """连接到服务器"""
@@ -1467,10 +1517,58 @@ class MinecraftChatClient:
         if self.socket:
             self.socket.close()
 
+    def _parse_fabric_mod_json(self, content, filename):
+      """解析Fabric mod的JSON文件"""
+      try:
+        data = json.loads(content)
+        modid = data.get("id", filename.replace('.jar', ''))
+        version = data.get("version", "unknown")
+        return {"modid": modid, "version": version}
+      except:
+        return {"modid": filename.replace('.jar', ''), "version": "unknown"}
+
+    def _parse_mod_from_filename(self, filename):
+      """从文件名解析mod信息"""
+      # 移除.jar扩展名
+      name = filename.replace('.jar', '')
+
+      # 常见mod文件名模式: modname-version 或 modname_version
+      patterns = [
+        r'(.+?)[-_](\d+\.\d+(?:\.\d+)?(?:-.+)?)$',  # modname-1.2.3 或 modname_1.2.3
+        r'(.+?)[-_]v?(\d+(?:\.\d+)*(?:-.+)?)$',  # modname-v1.2.3 或 modname_v1.2.3
+      ]
+
+      for pattern in patterns:
+        match = re.match(pattern, name)
+        if match:
+          modid = match.group(1)
+          version = match.group(2)
+          # 确保modid不包含版本号部分
+          if version and not modid.endswith(version):
+            return {"modid": modid, "version": version}
+
+      # 如果无法从文件名提取版本，返回基本mod信息
+      return {"modid": name, "version": "unknown"}
     def stop(self):
         """停止监听"""
         self.running = False
 
+
+def _extract_version_from_filename(self, filename):
+  """从文件名提取版本号"""
+  # 常见版本号模式
+  patterns = [
+    r'(\d+\.\d+(?:\.\d+)?(?:-.+)?)$',  # 1.2.3 或 1.2.3-alpha
+    r'[_-]v?(\d+(?:\.\d+)*(?:-.+)?)$',  # -v1.2.3 或 _1.2.3
+  ]
+
+  name = filename.replace('.jar', '')
+  for pattern in patterns:
+    match = re.search(pattern, name)
+    if match:
+      return match.group(1)
+
+  return "unknown"
 
 # 服务器信息查询接口类
 class ServerInfoInterface:

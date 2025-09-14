@@ -94,8 +94,8 @@ MIT License - 详见 LICENSE 文件。
 本项目已在以下环境中测试：
 - Termux (Android)
 - PowerShell (Windows 10/11)
-- Linux Bash (Ubuntu, CentOS)
-- macOS Terminal
+
+
 
 ## 注意事项
 

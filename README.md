@@ -23,14 +23,14 @@
 ```bash
 pkg update
 pkg install python
-git clone (https://github.com/ChuanYuanNotBoat/Minecraft-Server-Manager.git)
+git clone “https://github.com/ChuanYuanNotBoat/Minecraft-Server-Manager.git”
 cd minecraft-server-manager
 ```
 
 ### PowerShell/Windows 安装
 
 ```bash
-git clone (https://github.com/ChuanYuanNotBoat/Minecraft-Server-Manager.git)
+git clone ”https://github.com/ChuanYuanNotBoat/Minecraft-Server-Manager.git“
 cd minecraft-server-manager
 python -m pip install -r requirements.txt
 ```

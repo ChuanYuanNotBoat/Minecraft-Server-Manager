@@ -24,54 +24,30 @@ print("Minecraft服务器查询模块已导入")
 if DEBUG_MODE:
     print("调试模式已启用")
 
-class MinecraftQuery:
-    """Minecraft服务器查询模块，支持Java版和基岩版"""
+# 协议版本文件路径
+PROTOCOL_VERSIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "protocol_versions.json")
 
-    # 颜色代码定义 (ANSI)
-    class Colors:
-        BLACK = '\033[30m'
-        RED = '\033[31m'
-        GREEN = '\033[32m'
-        YELLOW = '\033[33m'
-        BLUE = '\033[34m'
-        PURPLE = '\033[35m'
-        CYAN = '\033[36m'
-        WHITE = '\033[37m'
-        RESET = '\033[0m'
-        BOLD = '\033[1m'
+# 尝试从外部文件加载协议版本
+try:
+    with open(PROTOCOL_VERSIONS_FILE, 'r', encoding='utf-8') as f:
+        PROTOCOL_VERSIONS = json.load(f)
+    # 确保所有值都是整数
+    PROTOCOL_VERSIONS = {k: int(v) for k, v in PROTOCOL_VERSIONS.items()}
+    if DEBUG_MODE:
+        print(f"[DEBUG] 从外部文件加载了 {len(PROTOCOL_VERSIONS)} 个协议版本")
+except Exception as e:
+    if DEBUG_MODE:
+        print(f"[DEBUG] 无法加载外部协议版本文件: {e}, 使用内置版本")
 
-        # Minecraft颜色代码映射
-        MC_COLORS = {
-            '0': BLACK,     # 黑色
-            '1': BLUE,      # 深蓝
-            '2': GREEN,     # 绿色
-            '3': CYAN,      # 青色
-            '4': RED,       # 红色
-            '5': PURPLE,    # 紫色
-            '6': YELLOW,    # 金色
-            '7': WHITE,     # 灰色
-            '8': BLACK,     # 深灰
-            '9': BLUE,      # 蓝色
-            'a': GREEN,     # 亮绿
-            'b': CYAN,      # 天蓝
-            'c': RED,       # 亮红
-            'd': PURPLE,    # 粉红
-            'e': YELLOW,    # 黄色
-            'f': WHITE,     # 白色
-            'k': '',        # 随机字符
-            'l': BOLD,      # 粗体
-            'm': '',        # 删除线
-            'n': '',        # 下划线
-            'o': '',        # 斜体
-            'r': RESET,     # 重置
-        }
-
-    # 缓存机制
-    cache = {}
-    CACHE_DURATION = 60  # 缓存时间(秒)
-
-    # 协议版本映射表 (Minecraft版本 -> 协议版本)
+    # 使用内置的协议版本映射表 (作为回退)
     PROTOCOL_VERSIONS = {
+        "1.21.1": 767,
+        "1.21": 766,
+        "1.20.6": 766,
+        "1.20.5": 766,
+        "1.20.4": 765,
+        "1.20.3": 765,
+        "1.20.2": 764,
         "1.20.1": 763,
         "1.20": 763,
         "1.19.4": 762,
@@ -135,6 +111,52 @@ class MinecraftQuery:
         "1.7.3": 4,
         "1.7.2": 4,
     }
+
+class MinecraftQuery:
+    """Minecraft服务器查询模块，支持Java版和基岩版"""
+
+    # 颜色代码定义 (ANSI)
+    class Colors:
+        BLACK = '\033[30m'
+        RED = '\033[31m'
+        GREEN = '\033[32m'
+        YELLOW = '\033[33m'
+        BLUE = '\033[34m'
+        PURPLE = '\033[35m'
+        CYAN = '\033[36m'
+        WHITE = '\033[37m'
+        RESET = '\033[0m'
+        BOLD = '\033[1m'
+
+        # Minecraft颜色代码映射
+        MC_COLORS = {
+            '0': BLACK,     # 黑色
+            '1': BLUE,      # 深蓝
+            '2': GREEN,     # 绿色
+            '3': CYAN,      # 青色
+            '4': RED,       # 红色
+            '5': PURPLE,    # 紫色
+            '6': YELLOW,    # 金色
+            '7': WHITE,     # 灰色
+            '8': BLACK,     # 深灰
+            '9': BLUE,      # 蓝色
+            'a': GREEN,     # 亮绿
+            'b': CYAN,      # 天蓝
+            'c': RED,       # 亮红
+            'd': PURPLE,    # 粉红
+            'e': YELLOW,    # 黄色
+            'f': WHITE,     # 白色
+            'k': '',        # 随机字符
+            'l': BOLD,      # 粗体
+            'm': '',        # 删除线
+            'n': '',        # 下划线
+            'o': '',        # 斜体
+            'r': RESET,     # 重置
+        }
+
+    # 缓存机制
+    cache = {}
+    CACHE_DURATION = 60  # 缓存时间(秒)
 
     @staticmethod
     def ping(host, port=25565, timeout=3, server_type="auto", use_cache=True):
@@ -232,7 +254,7 @@ class MinecraftQuery:
 
         try:
             # 发送握手包
-            protocol_version = MinecraftQuery.PROTOCOL_VERSIONS.get("1.20.1", 763)  # 默认使用1.20.1协议版本
+            protocol_version = PROTOCOL_VERSIONS.get("1.20.1", 763)  # 默认使用1.20.1协议版本
             handshake = MinecraftQuery._pack_varint(0)  # 包ID: 握手
             handshake += MinecraftQuery._pack_varint(protocol_version)  # 协议版本
             handshake += MinecraftQuery._pack_string(host)  # 服务器地址
@@ -636,7 +658,7 @@ class MinecraftLogin:
         self.port = port
         self.username = username
         self.version = version
-        self.protocol_version = MinecraftQuery.PROTOCOL_VERSIONS.get(version, 763)
+        self.protocol_version = PROTOCOL_VERSIONS.get(version, 763)
         self.socket = None
         self.session_id = str(uuid.uuid4())
         self.compression_threshold = -1
@@ -805,12 +827,26 @@ class MinecraftChatClient:
     PLAYER_LIST = 0x36
     DISCONNECT = 0x1A
 
-    def __init__(self, host, port=25565, username="ChatClient", version="1.20.1"):
+    def __init__(self, host, port=25565, username="ChatClient", version=None):
         self.host = host
         self.port = port
         self.username = username
-        self.version = version
-        self.protocol_version = MinecraftQuery.PROTOCOL_VERSIONS.get(version, 763)
+
+        # 如果没有指定版本，尝试自动检测
+        if version is None:
+            self.version = self.detect_server_version()
+        else:
+            self.version = version
+
+        # 获取协议版本
+        if self.version in PROTOCOL_VERSIONS:
+            self.protocol_version = PROTOCOL_VERSIONS[self.version]
+        else:
+            # 如果版本不在映射表中，尝试找到最接近的版本
+            self.protocol_version = self.find_closest_protocol_version(self.version)
+            if DEBUG_MODE:
+                print(f"[DEBUG] 版本 {self.version} 不在映射表中，使用协议版本 {self.protocol_version}")
+
         self.socket = None
         self.session_id = str(uuid.uuid4())
         self.compression_threshold = -1
@@ -823,6 +859,56 @@ class MinecraftChatClient:
         # 确保日志目录存在
         if not os.path.exists(self.log_dir):
             os.makedirs(self.log_dir)
+
+    def detect_server_version(self):
+        """自动检测服务器版本"""
+        try:
+            result = MinecraftQuery.ping(self.host, self.port, timeout=3, server_type="java")
+            if "error" not in result and "version" in result:
+                return result["version"].get("name", "1.20.1")
+        except Exception as e:
+            if DEBUG_MODE:
+                print(f"[DEBUG] 版本检测失败: {str(e)}")
+
+        # 默认回退版本
+        return "1.20.1"
+
+    def find_closest_protocol_version(self, version):
+        """查找最接近的协议版本"""
+        # 尝试解析版本号
+        try:
+            version_parts = list(map(int, version.split('.')))
+
+            # 查找所有可用的版本
+            available_versions = []
+            for v in PROTOCOL_VERSIONS.keys():
+                try:
+                    v_parts = list(map(int, v.split('.')))
+                    available_versions.append((v, v_parts))
+                except:
+                    continue
+
+            # 按版本号排序
+            available_versions.sort(key=lambda x: x[1])
+
+            # 找到最接近的版本
+            closest_version = "1.21.1"  # 默认最新版本
+            min_diff = float('inf')
+
+            for v, v_parts in available_versions:
+                # 计算版本差异
+                diff = 0
+                for i in range(min(len(version_parts), len(v_parts))):
+                    diff += abs(version_parts[i] - v_parts[i]) * (10 ** (3 - i))
+
+                if diff < min_diff:
+                    min_diff = diff
+                    closest_version = v
+
+            return PROTOCOL_VERSIONS[closest_version]
+        except:
+            # 如果解析失败，返回最新版本的协议号
+            return PROTOCOL_VERSIONS.get("1.21.1", 767)
 
     def set_server_name(self, name):
         """设置服务器名称（用于日志文件）"""

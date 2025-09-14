@@ -1403,10 +1403,28 @@ class ServerManager:
         username = server.get('chat_username', f"Player{random.randint(1000, 9999)}")
         print(f"{Colors.CYAN}使用用户名: {username}{Colors.RESET}")
 
+        # 先尝试获取服务器版本信息
+        print(f"{Colors.CYAN}正在检测服务器版本...{Colors.RESET}")
+        try:
+            result = MinecraftPing.ping(server['ip'], port, timeout=5, server_type="java")
+            if 'error' in result:
+                print(f"{Colors.YELLOW}无法检测服务器版本，使用默认版本{Colors.RESET}")
+                server_version = None
+            else:
+                server_version = result.get('version', {}).get('name', None)
+                if server_version:
+                    print(f"{Colors.GREEN}检测到服务器版本: {server_version}{Colors.RESET}")
+                else:
+                    print(f"{Colors.YELLOW}无法获取服务器版本，使用默认版本{Colors.RESET}")
+                    server_version = None
+        except Exception as e:
+            print(f"{Colors.YELLOW}版本检测失败: {str(e)}{Colors.RESET}")
+            server_version = None
+
         # 创建聊天客户端
         global global_chat_client
         try:
-            chat_client = MinecraftChatClient(server['ip'], port, username)
+            chat_client = MinecraftChatClient(server['ip'], port, username, server_version)
             chat_client.set_server_name(server['name'])
 
             # 设置消息回调
@@ -1469,6 +1487,13 @@ def print_help():
     print(f"  {Colors.GREEN}scanall{Colors.RESET}: 扫描IP/域名下的所有端口 (1-65535)")
     print(f"  {Colors.GREEN}h{Colors.RESET}: 显示帮助")
     print(f"  {Colors.GREEN}q{Colors.RESET}: 退出")
+
+    # 聊天功能说明
+    print(f"\n{Colors.BOLD}聊天功能说明:{Colors.RESET}")
+    print(f"  • 仅支持Java版服务器")
+    print(f"  • 在聊天中输入 '/quit' 退出聊天模式")
+    print(f"  • 按 Ctrl+C 也可以退出聊天模式")
+    print(f"  • 聊天消息会自动记录到日志文件中")
 
     # 等待用户按回车继续
     input(f"\n{Colors.CYAN}按回车键继续...{Colors.RESET}")

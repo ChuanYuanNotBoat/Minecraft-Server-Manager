@@ -1485,6 +1485,7 @@ def print_help():
     print(f"  {Colors.GREEN}chat <序号>{Colors.RESET}: 连接到指定服务器的聊天")
     print(f"  {Colors.GREEN}scan{Colors.RESET}: 扫描IP/域名下的Minecraft服务器端口")
     print(f"  {Colors.GREEN}scanall{Colors.RESET}: 扫描IP/域名下的所有端口 (1-65535)")
+    print(f"  {Colors.GREEN}mods <序号>{Colors.RESET}: 配置指定服务器的Mod列表")
     print(f"  {Colors.GREEN}h{Colors.RESET}: 显示帮助")
     print(f"  {Colors.GREEN}q{Colors.RESET}: 退出")
 
@@ -1825,7 +1826,46 @@ def main():
             print_help()
         elif cmd == 'q':  # 退出
             print(f"{Colors.GREEN}再见!{Colors.RESET}")
-            break
+        elif cmd.startswith('mods '):  # 配置Mod列表
+            try:
+              parts = cmd.split()
+              if len(parts) < 2:
+                print(f"{Colors.RED}请指定服务器序号{Colors.RESET}")
+                continue
+
+              index = int(parts[1]) - 1
+              actual_index = manager.current_page * manager.page_size + index
+
+              if 0 <= actual_index < len(manager.servers):
+                server = manager.servers[actual_index]
+
+                if server.get('type', 'java') != 'java':
+                  print(f"{Colors.RED}只有Java版服务器需要配置Mod{Colors.RESET}")
+                  continue
+
+                print(f"{Colors.CYAN}正在为 {server['name']} 配置Mod...{Colors.RESET}")
+
+                if not SERVER_INFO_AVAILABLE:
+                  print(f"{Colors.RED}Mod配置需要server_info模块，但未找到{Colors.RESET}")
+                  continue
+
+                # 创建MinecraftLogin实例并选择mods文件夹
+                from server_info import MinecraftLogin
+                login = MinecraftLogin(server['ip'], server.get('port', 25565), server.get('chat_username', 'Player'))
+                mods_list = login.select_mods_folder()
+
+                if mods_list:
+                  server['mod_list'] = mods_list
+                  manager.save_servers()
+                  print(f"{Colors.GREEN}已成功配置 {len(mods_list)} 个Mod{Colors.RESET}")
+                else:
+                  print(f"{Colors.YELLOW}未选择Mod或选择失败{Colors.RESET}")
+              else:
+                print(f"{Colors.RED}无效的服务器序号{Colors.RESET}")
+            except ValueError:
+              print(f"{Colors.RED}请输入有效的服务器序号{Colors.RESET}")
+            except Exception as e:
+              print(f"{Colors.RED}配置Mod时出错: {str(e)}{Colors.RESET}")
         else:
             print(f"{Colors.RED}未知命令 (输入'h'查看帮助){Colors.RESET}")
 

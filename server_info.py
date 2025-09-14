@@ -15,6 +15,9 @@ import base64
 import hashlib
 import random
 import string
+import tkinter as tk
+from tkinter import filedialog
+import zipfile
 
 # 调试模式开关
 DEBUG_MODE = True
@@ -28,11 +31,29 @@ if DEBUG_MODE:
 PROTOCOL_VERSIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "protocol_versions.json")
 
 # 尝试从外部文件加载协议版本
+PROTOCOL_VERSIONS = {}
 try:
     with open(PROTOCOL_VERSIONS_FILE, 'r', encoding='utf-8') as f:
-        PROTOCOL_VERSIONS = json.load(f)
-    # 确保所有值都是整数
-    PROTOCOL_VERSIONS = {k: int(v) for k, v in PROTOCOL_VERSIONS.items()}
+        loaded_data = json.load(f)
+
+    # 检查是否是嵌套结构（包含"Java Edition"键）
+    if "Java Edition" in loaded_data:
+        loaded_versions = loaded_data["Java Edition"]
+        if DEBUG_MODE:
+            print(f"[DEBUG] 检测到嵌套协议版本结构，使用'Java Edition'键下的数据")
+    else:
+        loaded_versions = loaded_data
+
+    # 确保所有值都是整数，跳过无法转换的值
+    for k, v in loaded_versions.items():
+        try:
+            if v is not None:  # 跳过null值
+                PROTOCOL_VERSIONS[k] = int(v)
+        except (ValueError, TypeError):
+            if DEBUG_MODE:
+                print(f"[DEBUG] 跳过无效的协议版本: {k}: {v}")
+            continue
+
     if DEBUG_MODE:
         print(f"[DEBUG] 从外部文件加载了 {len(PROTOCOL_VERSIONS)} 个协议版本")
 except Exception as e:
@@ -662,9 +683,221 @@ class MinecraftLogin:
         self.socket = None
         self.session_id = str(uuid.uuid4())
         self.compression_threshold = -1
+        self.is_forge = True
+        self.mods_list = []  # 添加Mod列表
+        self.is_forge = False  # 是否为Forge服务器
+
+        def set_mods_list(self, mods_list):
+          """设置Mod列表"""
+          self.mods_list = mods_list
+          self.is_forge = len(mods_list) > 2  # 如果除了minecraft和forge外还有其他mod，则认为是Forge服务器
+        # 创建mods配置目录
+        self.mods_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mods_config")
+        if not os.path.exists(self.mods_dir):
+            os.makedirs(self.mods_dir)
+
+        # 服务器标识符（用于文件名）
+        self.server_id = f"{host}_{port}".replace(".", "_").replace(":", "_")
+        self.mods_config_file = os.path.join(self.mods_dir, f"{self.server_id}.json")
+
+        # 尝试加载现有的mod配置
+        self.forge_mods = self._load_mods_config()
 
         if DEBUG_MODE:
             print(f"[DEBUG] 初始化Minecraft登录: {host}:{port}, 用户: {username}")
+    def _send_handshake(self):
+        """发送握手包"""
+        if DEBUG_MODE:
+            print(f"[DEBUG] 发送握手包")
+
+        packet = bytearray()
+
+        # 包ID (握手)
+        packet.extend(MinecraftQuery._pack_varint(0))
+
+        # 协议版本
+        packet.extend(MinecraftQuery._pack_varint(self.protocol_version))
+
+        # 服务器地址
+        packet.extend(MinecraftQuery._pack_string(self.host))
+
+        # 服务器端口
+        packet.extend(struct.pack('>H', self.port))
+
+        # 下一状态 (2 for login)
+        packet.extend(MinecraftQuery._pack_varint(2))
+
+        # 如果是Forge服务器，添加Forge特定的数据
+        if self.is_forge and self.mods_list:
+            # Forge握手数据
+            forge_data = bytearray()
+
+            # FML|HS标记
+            forge_data.extend(MinecraftQuery._pack_string("FML|HS"))
+
+            # Forge版本信息
+            forge_data.extend(MinecraftQuery._pack_string("FML"))
+            forge_data.extend(MinecraftQuery._pack_varint(3))  # 协议版本
+            forge_data.extend(MinecraftQuery._pack_varint(len(self.mods_list)))  # mod数量
+
+            # 添加每个mod的信息
+            for mod in self.mods_list:
+                forge_data.extend(MinecraftQuery._pack_string(mod.get("modid", "unknown")))
+                forge_data.extend(MinecraftQuery._pack_string(mod.get("version", "unknown")))
+
+            # 将Forge数据添加到握手包
+            packet.extend(forge_data)
+
+        # 发送包
+        self._send_packet(packet)
+
+    def _load_mods_config(self):
+        """加载现有的mod配置"""
+        if os.path.exists(self.mods_config_file):
+            try:
+                with open(self.mods_config_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception as e:
+                if DEBUG_MODE:
+                    print(f"[DEBUG] 加载mod配置失败: {e}")
+
+        # 如果没有配置或加载失败，返回默认的mod列表
+        return [
+            {"modid": "forge", "version": "40.2.0"},
+            {"modid": "minecraft", "version": self.version}
+        ]
+
+    def _save_mods_config(self, mods_list):
+        """保存mod配置到文件"""
+        try:
+            with open(self.mods_config_file, 'w', encoding='utf-8') as f:
+                json.dump(mods_list, f, indent=2, ensure_ascii=False)
+            return True
+        except Exception as e:
+            if DEBUG_MODE:
+                print(f"[DEBUG] 保存mod配置失败: {e}")
+            return False
+
+    def select_mods_folder(self):
+        """选择mods文件夹并解析mod信息"""
+        try:
+            # 尝试使用GUI文件对话框
+            root = tk.Tk()
+            root.withdraw()  # 隐藏主窗口
+            folder_path = filedialog.askdirectory(title="选择Minecraft mods文件夹")
+            root.destroy()
+
+            if not folder_path:
+                # 如果GUI选择失败或用户取消，使用命令行输入
+                print("GUI选择失败或取消，请输入mods文件夹路径:")
+                folder_path = input("mods文件夹路径: ").strip()
+
+            if not folder_path or not os.path.exists(folder_path):
+                print("无效的路径，使用默认mod列表")
+                return self.forge_mods
+
+            # 解析mods文件夹
+            mods_list = self._parse_mods_folder(folder_path)
+
+            # 保存配置
+            if mods_list:
+                self._save_mods_config(mods_list)
+                self.forge_mods = mods_list
+
+            return mods_list
+
+        except Exception as e:
+            if DEBUG_MODE:
+                print(f"[DEBUG] 选择mods文件夹失败: {e}")
+            print("选择mods文件夹失败，使用默认mod列表")
+            return self.forge_mods
+
+    def _parse_mods_folder(self, folder_path):
+        """解析mods文件夹中的jar文件"""
+        mods_list = []
+
+        # 添加基础mod
+        mods_list.append({"modid": "forge", "version": "40.2.0"})
+        mods_list.append({"modid": "minecraft", "version": self.version})
+
+        # 扫描mods文件夹
+        for filename in os.listdir(folder_path):
+            if filename.endswith('.jar'):
+                mod_info = self._extract_mod_info(os.path.join(folder_path, filename))
+                if mod_info:
+                    mods_list.append(mod_info)
+
+        return mods_list
+
+    def _extract_mod_info(self, jar_path):
+        """从jar文件中提取mod信息"""
+        try:
+            with zipfile.ZipFile(jar_path, 'r') as jar:
+                # 尝试查找mods.toml (Forge 1.13+)
+                if 'META-INF/mods.toml' in jar.namelist():
+                    with jar.open('META-INF/mods.toml') as f:
+                        content = f.read().decode('utf-8', errors='ignore')
+                        return self._parse_mods_toml(content, os.path.basename(jar_path))
+
+                # 尝试查找mcmod.info (Forge 1.12-)
+                elif 'mcmod.info' in jar.namelist():
+                    with jar.open('mcmod.info') as f:
+                        content = f.read().decode('utf-8', errors='ignore')
+                        return self._parse_mcmod_info(content, os.path.basename(jar_path))
+
+                # 如果都没有，使用文件名作为modid
+                else:
+                    filename = os.path.basename(jar_path)
+                    modid = filename.replace('.jar', '')
+                    return {"modid": modid, "version": "unknown"}
+
+        except Exception as e:
+            if DEBUG_MODE:
+                print(f"[DEBUG] 解析mod文件失败 {jar_path}: {e}")
+            return None
+
+    def _parse_mods_toml(self, content, filename):
+        """解析mods.toml文件"""
+        modid = None
+        version = None
+
+        # 简单的解析逻辑
+        lines = content.split('\n')
+        for i, line in enumerate(lines):
+            line = line.strip()
+            if line.startswith('modId='):
+                modid = line.split('=')[1].strip().strip('"')
+            elif line.startswith('version='):
+                version = line.split('=')[1].strip().strip('"')
+
+            # 如果找到两个值，提前退出
+            if modid and version:
+                break
+
+        # 如果解析失败，使用文件名
+        if not modid:
+            modid = filename.replace('.jar', '')
+        if not version:
+            version = "unknown"
+
+        return {"modid": modid, "version": version}
+
+    def _parse_mcmod_info(self, content, filename):
+        """解析mcmod.info文件"""
+        try:
+            # 尝试解析JSON
+            data = json.loads(content)
+            if isinstance(data, list) and len(data) > 0:
+                mod_info = data[0]
+                return {
+                    "modid": mod_info.get("modid", filename.replace('.jar', '')),
+                    "version": mod_info.get("version", "unknown")
+                }
+        except:
+            pass
+
+        # 如果解析失败，使用文件名
+        return {"modid": filename.replace('.jar', ''), "version": "unknown"}
 
     def connect(self):
         """连接到服务器"""
@@ -702,6 +935,27 @@ class MinecraftLogin:
 
         # 下一状态 (2 for login)
         packet.extend(MinecraftQuery._pack_varint(2))
+
+        # 如果是Forge服务器，添加Forge特定的数据
+        if self.is_forge:
+            # Forge握手数据
+            forge_data = bytearray()
+
+            # FML|HS标记
+            forge_data.extend(MinecraftQuery._pack_string("FML|HS"))
+
+            # Forge版本信息
+            forge_data.extend(MinecraftQuery._pack_string("FML"))
+            forge_data.extend(MinecraftQuery._pack_varint(3))  # 协议版本
+            forge_data.extend(MinecraftQuery._pack_varint(len(self.forge_mods)))  # mod数量
+
+            # 添加每个mod的信息
+            for mod in self.forge_mods:
+                forge_data.extend(MinecraftQuery._pack_string(mod["modid"]))
+                forge_data.extend(MinecraftQuery._pack_string(mod["version"]))
+
+            # 将Forge数据添加到握手包
+            packet.extend(forge_data)
 
         # 发送包
         self._send_packet(packet)

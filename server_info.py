@@ -1121,7 +1121,55 @@ class MinecraftLogin:
         string_data = data[varint_len:varint_len+length]
         return string_data.decode('utf-8', errors='ignore')
 
+    # 在 MinecraftLogin 类中添加以下方法
+    def _parse_fabric_mod_json(self, content, filename):
+      """解析Fabric mod的JSON文件"""
+      try:
+        data = json.loads(content)
+        modid = data.get("id", filename.replace('.jar', ''))
+        version = data.get("version", "unknown")
+        return {"modid": modid, "version": version}
+      except:
+        return {"modid": filename.replace('.jar', ''), "version": "unknown"}
 
+    def _parse_mod_from_filename(self, filename):
+      """从文件名解析mod信息"""
+      # 移除.jar扩展名
+      name = filename.replace('.jar', '')
+
+      # 常见mod文件名模式: modname-version 或 modname_version
+      patterns = [
+        r'(.+?)[-_](\d+\.\d+(?:\.\d+)?(?:-.+)?)$',  # modname-1.2.3 或 modname_1.2.3
+        r'(.+?)[-_]v?(\d+(?:\.\d+)*(?:-.+)?)$',  # modname-v1.2.3 或 modname_v1.2.3
+      ]
+
+      for pattern in patterns:
+        match = re.match(pattern, name)
+        if match:
+          modid = match.group(1)
+          version = match.group(2)
+          # 确保modid不包含版本号部分
+          if version and not modid.endswith(version):
+            return {"modid": modid, "version": version}
+
+      # 如果无法从文件名提取版本，返回基本mod信息
+      return {"modid": name, "version": "unknown"}
+
+    def _extract_version_from_filename(self, filename):
+      """从文件名提取版本号"""
+      # 常见版本号模式
+      patterns = [
+        r'(\d+\.\d+(?:\.\d+)?(?:-.+)?)$',  # 1.2.3 或 1.2.3-alpha
+        r'[_-]v?(\d+(?:\.\d+)*(?:-.+)?)$',  # -v1.2.3 或 _1.2.3
+      ]
+
+      name = filename.replace('.jar', '')
+      for pattern in patterns:
+        match = re.search(pattern, name)
+        if match:
+          return match.group(1)
+
+      return "unknown"
 class MinecraftChatClient:
     """Minecraft聊天客户端，支持监听和发送聊天消息"""
 
@@ -1517,58 +1565,6 @@ class MinecraftChatClient:
         if self.socket:
             self.socket.close()
 
-    def _parse_fabric_mod_json(self, content, filename):
-      """解析Fabric mod的JSON文件"""
-      try:
-        data = json.loads(content)
-        modid = data.get("id", filename.replace('.jar', ''))
-        version = data.get("version", "unknown")
-        return {"modid": modid, "version": version}
-      except:
-        return {"modid": filename.replace('.jar', ''), "version": "unknown"}
-
-    def _parse_mod_from_filename(self, filename):
-      """从文件名解析mod信息"""
-      # 移除.jar扩展名
-      name = filename.replace('.jar', '')
-
-      # 常见mod文件名模式: modname-version 或 modname_version
-      patterns = [
-        r'(.+?)[-_](\d+\.\d+(?:\.\d+)?(?:-.+)?)$',  # modname-1.2.3 或 modname_1.2.3
-        r'(.+?)[-_]v?(\d+(?:\.\d+)*(?:-.+)?)$',  # modname-v1.2.3 或 modname_v1.2.3
-      ]
-
-      for pattern in patterns:
-        match = re.match(pattern, name)
-        if match:
-          modid = match.group(1)
-          version = match.group(2)
-          # 确保modid不包含版本号部分
-          if version and not modid.endswith(version):
-            return {"modid": modid, "version": version}
-
-      # 如果无法从文件名提取版本，返回基本mod信息
-      return {"modid": name, "version": "unknown"}
-    def stop(self):
-        """停止监听"""
-        self.running = False
-
-
-def _extract_version_from_filename(self, filename):
-  """从文件名提取版本号"""
-  # 常见版本号模式
-  patterns = [
-    r'(\d+\.\d+(?:\.\d+)?(?:-.+)?)$',  # 1.2.3 或 1.2.3-alpha
-    r'[_-]v?(\d+(?:\.\d+)*(?:-.+)?)$',  # -v1.2.3 或 _1.2.3
-  ]
-
-  name = filename.replace('.jar', '')
-  for pattern in patterns:
-    match = re.search(pattern, name)
-    if match:
-      return match.group(1)
-
-  return "unknown"
 
 # 服务器信息查询接口类
 class ServerInfoInterface:

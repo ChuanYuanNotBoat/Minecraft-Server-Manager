@@ -1499,20 +1499,23 @@ def print_help():
     # 等待用户按回车继续
     input(f"\n{Colors.CYAN}按回车键继续...{Colors.RESET}")
 
+
 def sigint_handler(signum, frame):
-    """处理 Ctrl+C 信号"""
-    global global_cancel_query
-    global global_chat_client
+  """处理 Ctrl+C 信号"""
+  global global_cancel_query
+  global global_chat_client
 
-    # 如果正在聊天，退出聊天
-    if global_chat_client:
-        global_chat_client.stop()
-        global_chat_client = None
-        print(f"\n{Colors.YELLOW}已退出聊天模式{Colors.RESET}")
-        return
+  # 如果正在聊天，退出聊天
+  if global_chat_client:
+    global_chat_client.stop()
+    global_chat_client = None
+    print(f"\n{Colors.YELLOW}已退出聊天模式{Colors.RESET}")
+    return
 
-    global_cancel_query = True
-    print(f"\n{Colors.YELLOW}正在取消查询...{Colors.RESET}")
+  global_cancel_query = True
+  print(f"\n{Colors.YELLOW}正在取消查询...{Colors.RESET}")
+  # 设置一个标志，让程序知道需要退出
+  sys.exit(0)  # 直接退出程序
 
 def main():
     # 设置信号处理
@@ -1531,10 +1534,10 @@ def main():
 
         # 用户命令
         try:
-            cmd = input(f"\n{Colors.BOLD}命令 (h=帮助):{Colors.RESET} ").strip().lower()
-        except KeyboardInterrupt:
-            print(f"\n{Colors.YELLOW}返回主菜单...{Colors.RESET}")
-            continue
+          cmd = input(f"\n{Colors.BOLD}命令 (h=帮助):{Colors.RESET} ").strip().lower()
+        except (KeyboardInterrupt, EOFError):
+          print(f"\n{Colors.YELLOW}返回主菜单...{Colors.RESET}")
+          continue
 
         if cmd == 'n':  # 下一页
             if manager.current_page < manager.max_page():
@@ -1826,6 +1829,7 @@ def main():
             print_help()
         elif cmd == 'q':  # 退出
             print(f"{Colors.GREEN}再见!{Colors.RESET}")
+            break
         elif cmd.startswith('mods '):  # 配置Mod列表
             try:
               parts = cmd.split()

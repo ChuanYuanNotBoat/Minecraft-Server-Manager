@@ -683,75 +683,25 @@ class MinecraftLogin:
         self.socket = None
         self.session_id = str(uuid.uuid4())
         self.compression_threshold = -1
-        self.is_forge = True
-        self.mods_list = []  # 添加Mod列表
-        self.is_forge = False  # 是否为Forge服务器
+        self.is_forge = False
+        self.mods_list = []
+        self.forge_mods = []
+        self.channels = ["FML|HS", "FML", "FML|MP", "FORGE"]
 
-    def set_mods_list(self, mods_list):
-      self.mods_list = mods_list
-      # 如果除了minecraft和forge外还有其他mod，则认为是Forge服务器
-      self.is_forge = len(mods_list) > 2
+        # 创建mods配置目录
+        self.mods_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mods_config")
+        if not os.path.exists(self.mods_dir):
+            os.makedirs(self.mods_dir)
 
-      # 创建mods配置目录
-      self.mods_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mods_config")
-      if not os.path.exists(self.mods_dir):
-        os.makedirs(self.mods_dir)
+        # 服务器标识符（用于文件名）
+        self.server_id = f"{self.host}_{self.port}".replace(".", "_").replace(":", "_")
+        self.mods_config_file = os.path.join(self.mods_dir, f"{self.server_id}.json")
 
-      # 服务器标识符（用于文件名）
-      self.server_id = f"{self.host}_{self.port}".replace(".", "_").replace(":", "_")
-      self.mods_config_file = os.path.join(self.mods_dir, f"{self.server_id}.json")
+        # 尝试加载现有的mod配置
+        self.forge_mods = self._load_mods_config()
 
-      # 尝试加载现有的mod配置
-      self.forge_mods = self._load_mods_config()
-
-      if self.DEBUG_MODE:
-        print(f"[DEBUG] 初始化Minecraft登录: {self.host}:{self.port}, 用户: {self.username}")
-
-    def _send_handshake(self):
-      """发送握手包"""
-      if DEBUG_MODE:
-        print(f"[DEBUG] 发送握手包")
-
-      packet = bytearray()
-
-      # 包ID (握手)
-      packet.extend(MinecraftQuery._pack_varint(0))
-
-      # 协议版本
-      packet.extend(MinecraftQuery._pack_varint(self.protocol_version))
-
-      # 服务器地址
-      packet.extend(MinecraftQuery._pack_string(self.host))
-
-      # 服务器端口
-      packet.extend(struct.pack('>H', self.port))
-
-      # 下一状态 (2 for login)
-      packet.extend(MinecraftQuery._pack_varint(2))
-
-      # 如果是Forge服务器，添加Forge特定的数据
-      if hasattr(self, 'forge_mods') and self.forge_mods:  # 修改这里：添加属性存在性检查
-        # Forge握手数据
-        forge_data = bytearray()
-
-        # FML|HS标记
-        forge_data.extend(MinecraftQuery._pack_string("FML|HS"))
-
-        # Forge版本信息
-        forge_data.extend(MinecraftQuery._pack_string("FML"))
-        forge_data.extend(MinecraftQuery._pack_varint(3))  # 协议版本
-        forge_data.extend(MinecraftQuery._pack_varint(len(self.forge_mods)))  # mod数量
-
-        # 添加每个mod的信息
-        for mod in self.forge_mods:
-          forge_data.extend(MinecraftQuery._pack_string(mod["modid"]))
-          forge_data.extend(MinecraftQuery._pack_string(mod["version"]))
-
-        # 将Forge数据添加到握手包
-        packet.extend(forge_data)
-
-      # 发送包
-      self._send_packet(packet)
+        if DEBUG_MODE:
+            print(f"[DEBUG] 初始化Minecraft登录: {self.host}:{self.port}, 用户: {self.username}")
 
     def _load_mods_config(self):
         """加载现有的mod配置"""
@@ -805,6 +755,7 @@ class MinecraftLogin:
             if mods_list:
                 self._save_mods_config(mods_list)
                 self.forge_mods = mods_list
+                self.is_forge = len(mods_list) > 2  # 如果除了minecraft和forge外还有其他mod，则认为是Forge服务器
 
             return mods_list
 
@@ -832,124 +783,158 @@ class MinecraftLogin:
         return mods_list
 
     def _extract_mod_info(self, jar_path):
-      """从jar文件中提取mod信息"""
-      try:
-        with zipfile.ZipFile(jar_path, 'r') as jar:
-          # 首先尝试读取META-INF/mods.toml (Forge 1.13+)
-          if 'META-INF/mods.toml' in jar.namelist():
-            with jar.open('META-INF/mods.toml') as f:
-              content = f.read().decode('utf-8', errors='ignore')
-              mod_info = self._parse_mods_toml(content, os.path.basename(jar_path))
-              if mod_info and mod_info.get("version") != "unknown":
-                return mod_info
+        """从jar文件中提取mod信息"""
+        try:
+            with zipfile.ZipFile(jar_path, 'r') as jar:
+                # 首先尝试读取META-INF/mods.toml (Forge 1.13+)
+                if 'META-INF/mods.toml' in jar.namelist():
+                    with jar.open('META-INF/mods.toml') as f:
+                        content = f.read().decode('utf-8', errors='ignore')
+                        mod_info = self._parse_mods_toml(content, os.path.basename(jar_path))
+                        if mod_info and mod_info.get("version") != "unknown":
+                            return mod_info
 
-          # 尝试读取mcmod.info (Forge 1.12-)
-          if 'mcmod.info' in jar.namelist():
-            with jar.open('mcmod.info') as f:
-              content = f.read().decode('utf-8', errors='ignore')
-              mod_info = self._parse_mcmod_info(content, os.path.basename(jar_path))
-              if mod_info and mod_info.get("version") != "unknown":
-                return mod_info
+                # 尝试读取mcmod.info (Forge 1.12-)
+                if 'mcmod.info' in jar.namelist():
+                    with jar.open('mcmod.info') as f:
+                        content = f.read().decode('utf-8', errors='ignore')
+                        mod_info = self._parse_mcmod_info(content, os.path.basename(jar_path))
+                        if mod_info and mod_info.get("version") != "unknown":
+                            return mod_info
 
-          # 尝试读取fabric.mod.json (Fabric)
-          if 'fabric.mod.json' in jar.namelist():
-            with jar.open('fabric.mod.json') as f:
-              content = f.read().decode('utf-8', errors='ignore')
-              mod_info = self._parse_fabric_mod_json(content, os.path.basename(jar_path))
-              if mod_info and mod_info.get("version") != "unknown":
-                return mod_info
+                # 尝试读取fabric.mod.json (Fabric)
+                if 'fabric.mod.json' in jar.namelist():
+                    with jar.open('fabric.mod.json') as f:
+                        content = f.read().decode('utf-8', errors='ignore')
+                        mod_info = self._parse_fabric_mod_json(content, os.path.basename(jar_path))
+                        if mod_info and mod_info.get("version") != "unknown":
+                            return mod_info
 
-          # 如果以上方法都失败，尝试从文件名提取版本信息
-          filename = os.path.basename(jar_path)
-          return self._parse_mod_from_filename(filename)
+                # 如果以上方法都失败，尝试从文件名提取版本信息
+                filename = os.path.basename(jar_path)
+                return self._parse_mod_from_filename(filename)
 
-      except Exception as e:
-        if DEBUG_MODE:
-          print(f"[DEBUG] 解析mod文件失败 {jar_path}: {e}")
-        return None
+        except Exception as e:
+            if DEBUG_MODE:
+                print(f"[DEBUG] 解析mod文件失败 {jar_path}: {e}")
+            return None
 
-    def _extract_version_from_filename(self, filename):
-      """从文件名提取版本号"""
-      # 常见版本号模式
-      patterns = [
-        r'(\d+\.\d+(?:\.\d+)?(?:-.+)?)$',  # 1.2.3 或 1.2.3-alpha
-        r'[_-]v?(\d+(?:\.\d+)*(?:-.+)?)$',  # -v1.2.3 或 _1.2.3
-      ]
-
-      name = filename.replace('.jar', '')
-      for pattern in patterns:
-        match = re.search(pattern, name)
-        if match:
-          return match.group(1)
-
-      return "unknown"
     def _parse_mods_toml(self, content, filename):
-      """解析mods.toml文件"""
-      modid = None
-      version = None
-      display_name = None
+        """解析mods.toml文件"""
+        modid = None
+        version = None
+        display_name = None
 
-      # 更全面的解析逻辑
-      lines = content.split('\n')
-      in_mod_section = False
+        # 更全面的解析逻辑
+        lines = content.split('\n')
+        in_mod_section = False
 
-      for line in lines:
-        line = line.strip()
+        for line in lines:
+            line = line.strip()
 
-        # 检测mod部分开始
-        if line == "[[mods]]":
-          in_mod_section = True
-          continue
+            # 检测mod部分开始
+            if line == "[[mods]]":
+                in_mod_section = True
+                continue
 
-        # 只在mod部分内解析
-        if in_mod_section:
-          if line.startswith('modId='):
-            modid = line.split('=', 1)[1].strip().strip('"\'')
-          elif line.startswith('version='):
-            version = line.split('=', 1)[1].strip().strip('"\'')
-          elif line.startswith('displayName='):
-            display_name = line.split('=', 1)[1].strip().strip('"\'')
-          elif line.startswith('[') and not line.startswith('[[mods]]'):
-            # 新节开始，退出mod部分
-            break
+            # 只在mod部分内解析
+            if in_mod_section:
+                if line.startswith('modId='):
+                    modid = line.split('=', 1)[1].strip().strip('"\'')
+                elif line.startswith('version='):
+                    version = line.split('=', 1)[1].strip().strip('"\'')
+                elif line.startswith('displayName='):
+                    display_name = line.split('=', 1)[1].strip().strip('"\'')
+                elif line.startswith('[') and not line.startswith('[[mods]]'):
+                    # 新节开始，退出mod部分
+                    break
 
-      # 如果解析失败，使用文件名
-      if not modid:
-        modid = filename.replace('.jar', '')
-      if not version or version == "${file.jarVersion}":
-        version = self._extract_version_from_filename(filename)
+        # 如果解析失败，使用文件名
+        if not modid:
+            modid = filename.replace('.jar', '')
+        if not version or version == "${file.jarVersion}":
+            version = self._extract_version_from_filename(filename)
 
-      return {"modid": modid, "version": version, "display_name": display_name}
+        return {"modid": modid, "version": version, "display_name": display_name}
 
     def _parse_mcmod_info(self, content, filename):
-      """解析mcmod.info文件"""
-      try:
-        # 尝试解析JSON
-        data = json.loads(content)
+        """解析mcmod.info文件"""
+        try:
+            # 尝试解析JSON
+            data = json.loads(content)
 
-        # 处理不同的JSON结构
-        if isinstance(data, list) and len(data) > 0:
-          # 旧格式: [{"modid": "...", "version": "...", ...}]
-          mod_info = data[0]
-          modid = mod_info.get("modid", filename.replace('.jar', ''))
-          version = mod_info.get("version", "unknown")
-        elif isinstance(data, dict):
-          # 新格式: {"modList": [{"modid": "...", "version": "...", ...}]}
-          if "modList" in data and isinstance(data["modList"], list) and len(data["modList"]) > 0:
-            mod_info = data["modList"][0]
-            modid = mod_info.get("modid", filename.replace('.jar', ''))
-            version = mod_info.get("version", "unknown")
-          else:
-            modid = filename.replace('.jar', '')
-            version = "unknown"
-        else:
-          modid = filename.replace('.jar', '')
-          version = "unknown"
+            # 处理不同的JSON结构
+            if isinstance(data, list) and len(data) > 0:
+                # 旧格式: [{"modid": "...", "version": "...", ...}]
+                mod_info = data[0]
+                modid = mod_info.get("modid", filename.replace('.jar', ''))
+                version = mod_info.get("version", "unknown")
+            elif isinstance(data, dict):
+                # 新格式: {"modList": [{"modid": "...", "version": "...", ...}]}
+                if "modList" in data and isinstance(data["modList"], list) and len(data["modList"]) > 0:
+                    mod_info = data["modList"][0]
+                    modid = mod_info.get("modid", filename.replace('.jar', ''))
+                    version = mod_info.get("version", "unknown")
+                else:
+                    modid = filename.replace('.jar', '')
+                    version = "unknown"
+            else:
+                modid = filename.replace('.jar', '')
+                version = "unknown"
 
-        return {"modid": modid, "version": version}
-      except:
-        # 如果解析失败，尝试从文件名提取
-        return self._parse_mod_from_filename(filename)
+            return {"modid": modid, "version": version}
+        except:
+            # 如果解析失败，尝试从文件名提取
+            return self._parse_mod_from_filename(filename)
+
+    def _parse_fabric_mod_json(self, content, filename):
+        """解析Fabric mod的JSON文件"""
+        try:
+            data = json.loads(content)
+            modid = data.get("id", filename.replace('.jar', ''))
+            version = data.get("version", "unknown")
+            return {"modid": modid, "version": version}
+        except:
+            return {"modid": filename.replace('.jar', ''), "version": "unknown"}
+
+    def _parse_mod_from_filename(self, filename):
+        """从文件名解析mod信息"""
+        # 移除.jar扩展名
+        name = filename.replace('.jar', '')
+
+        # 常见mod文件名模式: modname-version 或 modname_version
+        patterns = [
+            r'(.+?)[-_](\d+\.\d+(?:\.\d+)?(?:-.+)?)$',  # modname-1.2.3 或 modname_1.2.3
+            r'(.+?)[-_]v?(\d+(?:\.\d+)*(?:-.+)?)$',  # modname-v1.2.3 或 modname_v1.2.3
+        ]
+
+        for pattern in patterns:
+            match = re.match(pattern, name)
+            if match:
+                modid = match.group(1)
+                version = match.group(2)
+                # 确保modid不包含版本号部分
+                if version and not modid.endswith(version):
+                    return {"modid": modid, "version": version}
+
+        # 如果无法从文件名提取版本，返回基本mod信息
+        return {"modid": name, "version": "unknown"}
+
+    def _extract_version_from_filename(self, filename):
+        """从文件名提取版本号"""
+        # 常见版本号模式
+        patterns = [
+            r'(\d+\.\d+(?:\.\d+)?(?:-.+)?)$',  # 1.2.3 或 1.2.3-alpha
+            r'[_-]v?(\d+(?:\.\d+)*(?:-.+)?)$',  # -v1.2.3 或 _1.2.3
+        ]
+
+        name = filename.replace('.jar', '')
+        for pattern in patterns:
+            match = re.search(pattern, name)
+            if match:
+                return match.group(1)
+
+        return "unknown"
 
     def connect(self):
         """连接到服务器"""
@@ -989,7 +974,7 @@ class MinecraftLogin:
         packet.extend(MinecraftQuery._pack_varint(2))
 
         # 如果是Forge服务器，添加Forge特定的数据
-        if self.is_forge:
+        if self.is_forge and self.forge_mods:
             # Forge握手数据
             forge_data = bytearray()
 
@@ -1057,74 +1042,147 @@ class MinecraftLogin:
 
         return data
 
-    # 在server_info.py中的MinecraftChatClient类的login方法中添加以下处理逻辑
+    def _handle_forge_handshake(self, data):
+        """处理Forge握手响应"""
+        if DEBUG_MODE:
+            print(f"[DEBUG] 处理Forge握手响应")
+
+        try:
+            # 解析Forge响应
+            offset = 0
+
+            # 读取FML标记
+            fml_marker, varint_len = MinecraftQuery._read_varint_from_bytes(data[offset:])
+            offset += varint_len
+            fml_marker_str = data[offset:offset + fml_marker].decode('utf-8', errors='ignore')
+            offset += fml_marker
+
+            if fml_marker_str == "FML":
+                # 读取协议版本
+                protocol_version, varint_len = MinecraftQuery._read_varint_from_bytes(data[offset:])
+                offset += varint_len
+
+                if DEBUG_MODE:
+                    print(f"[DEBUG] Forge协议版本: {protocol_version}")
+
+                # 这里可以添加更多的Forge响应处理逻辑
+                return True
+        except Exception as e:
+            if DEBUG_MODE:
+                print(f"[DEBUG] 处理Forge握手响应失败: {e}")
+
+        return False
+
+    def _send_login_plugin_response(self, message_id, success=True, data=b''):
+        """发送Login Plugin Response"""
+        if DEBUG_MODE:
+            print(f"[DEBUG] 发送Login Plugin Response")
+
+        packet = bytearray()
+
+        # 包ID (Login Plugin Response)
+        packet.extend(MinecraftQuery._pack_varint(0x02))
+
+        # 消息ID
+        packet.extend(MinecraftQuery._pack_varint(message_id))
+
+        # 成功标志
+        packet.extend(b'\x01' if success else b'\x00')
+
+        # 数据
+        if success and data:
+            packet.extend(MinecraftQuery._pack_varint(len(data)))
+            packet.extend(data)
+        else:
+            packet.extend(MinecraftQuery._pack_varint(0))
+
+        # 发送包
+        self._send_packet(packet)
 
     def login(self):
-      """执行登录流程"""
-      if DEBUG_MODE:
-        print(f"[DEBUG] 开始登录流程")
-
-      try:
-        self.connect()
-
-        # 处理登录响应
-        while True:
-          packet = self.receive_packet()
-          if packet is None:
-            break
-
-          # 解析包ID
-          packet_id = MinecraftQuery._read_varint_from_bytes(packet)[0]
-          offset = len(MinecraftQuery._pack_varint(packet_id))
-
-          # 根据包ID处理
-          if packet_id == 0x03:  # Set Compression
-            self.compression_threshold = MinecraftQuery._read_varint_from_bytes(packet[offset:])[0]
-            if DEBUG_MODE:
-              print(f"[DEBUG] 压缩阈值设置为: {self.compression_threshold}")
-
-          elif packet_id == 0x02:  # Login Success
-            uuid = MinecraftQuery._read_string_from_bytes(packet[offset:])
-            offset += len(uuid) + 2
-            username = MinecraftQuery._read_string_from_bytes(packet[offset:])
-            if DEBUG_MODE:
-              print(f"[DEBUG] 登录成功: {username} ({uuid})")
-            return True
-
-          elif packet_id == 0x01:  # Encryption Request
-            if DEBUG_MODE:
-              print(f"[DEBUG] 服务器要求加密，当前不支持")
-            return False
-
-          elif packet_id == 0x00:  # Disconnect
-            reason = packet[offset:].decode('utf-8', errors='ignore')
-            if DEBUG_MODE:
-              print(f"[DEBUG] 服务器断开连接: {reason}")
-            return False
-
-          elif packet_id == 0x04:  # Login Plugin Request (Forge相关)
-            if DEBUG_MODE:
-              print(f"[DEBUG] 收到Login Plugin Request，发送空响应")
-            # 读取消息ID
-            message_id = MinecraftQuery._read_varint_from_bytes(packet[offset:])[0]
-            # 发送空的Login Plugin Response
-            response = bytearray()
-            response.extend(MinecraftQuery._pack_varint(0x02))  # 包ID
-            response.extend(MinecraftQuery._pack_varint(message_id))  # 相同的消息ID
-            response.extend(b'\x00')  # 成功标志 + 无数据
-            self._send_packet(response)
-
-          # 添加对其他可能包的处理
-          else:
-            if DEBUG_MODE:
-              print(f"[DEBUG] 收到未知包ID: {packet_id}，长度: {len(packet)}")
-            # 对于未知包，继续处理，不立即断开
-
-        return False
-      except Exception as e:
+        """执行登录流程"""
         if DEBUG_MODE:
-          print(f"[DEBUG] 登录过程中发生错误: {e}")
-        return False
+            print(f"[DEBUG] 开始登录流程")
+
+        try:
+            self.connect()
+
+            # 处理登录响应
+            while True:
+                packet = self.receive_packet()
+                if packet is None:
+                    break
+
+                # 解析包ID
+                packet_id, offset = MinecraftQuery._read_varint_from_bytes(packet)
+                if packet_id is None:
+                    continue
+
+                # 根据包ID处理
+                if packet_id == 0x03:  # Set Compression
+                    self.compression_threshold = MinecraftQuery._read_varint_from_bytes(packet[offset:])[0]
+                    if DEBUG_MODE:
+                        print(f"[DEBUG] 压缩阈值设置为: {self.compression_threshold}")
+
+                elif packet_id == 0x02:  # Login Success
+                    uuid_str = MinecraftQuery._read_string_from_bytes(packet[offset:])
+                    offset += len(uuid_str) + 2
+                    username = MinecraftQuery._read_string_from_bytes(packet[offset:])
+                    if DEBUG_MODE:
+                        print(f"[DEBUG] 登录成功: {username} ({uuid_str})")
+                    return True
+
+                elif packet_id == 0x01:  # Encryption Request
+                    if DEBUG_MODE:
+                        print(f"[DEBUG] 服务器要求加密，当前不支持")
+                    return False
+
+                elif packet_id == 0x00:  # Disconnect
+                    reason = packet[offset:].decode('utf-8', errors='ignore')
+                    if DEBUG_MODE:
+                        print(f"[DEBUG] 服务器断开连接: {reason}")
+                    return False
+
+                elif packet_id == 0x04:  # Login Plugin Request (Forge相关)
+                    if DEBUG_MODE:
+                        print(f"[DEBUG] 收到Login Plugin Request，处理Forge握手")
+
+                    # 读取消息ID
+                    message_id, varint_len = MinecraftQuery._read_varint_from_bytes(packet[offset:])
+                    offset += varint_len
+
+                    # 读取通道名称
+                    channel_len, varint_len = MinecraftQuery._read_varint_from_bytes(packet[offset:])
+                    offset += varint_len
+                    channel = packet[offset:offset + channel_len].decode('utf-8', errors='ignore')
+                    offset += channel_len
+
+                    # 读取数据
+                    data_len, varint_len = MinecraftQuery._read_varint_from_bytes(packet[offset:])
+                    offset += varint_len
+                    data = packet[offset:offset + data_len] if data_len > 0 else b''
+
+                    if DEBUG_MODE:
+                        print(f"[DEBUG] Login Plugin Request - 消息ID: {message_id}, 通道: {channel}, 数据长度: {data_len}")
+
+                    # 处理Forge握手
+                    if channel == "FML|HS":
+                        self._handle_forge_handshake(data)
+
+                    # 发送响应
+                    self._send_login_plugin_response(message_id, True)
+
+                # 添加对其他可能包的处理
+                else:
+                    if DEBUG_MODE:
+                        print(f"[DEBUG] 收到未知包ID: {packet_id}，长度: {len(packet)}")
+                    # 对于未知包，继续处理，不立即断开
+
+            return False
+        except Exception as e:
+            if DEBUG_MODE:
+                print(f"[DEBUG] 登录过程中发生错误: {e}")
+            return False
 
     @staticmethod
     def _read_string_from_bytes(data):
@@ -1132,63 +1190,15 @@ class MinecraftLogin:
         if DEBUG_MODE:
             print(f"[DEBUG] 从字节数据读取字符串")
 
-        length = MinecraftLogin._read_varint_from_bytes(data)[0]
-        if length is None:
+        str_length, varint_size = MinecraftQuery._read_varint_from_bytes(data)
+        if str_length is None:
             return ""
 
-        varint_len = len(MinecraftQuery._pack_varint(length))
-        string_data = data[varint_len:varint_len+length]
+        varint_len = len(MinecraftQuery._pack_varint(str_length))
+        string_data = data[varint_len:varint_len+str_length]
         return string_data.decode('utf-8', errors='ignore')
 
-    # 在 MinecraftLogin 类中添加以下方法
-    def _parse_fabric_mod_json(self, content, filename):
-      """解析Fabric mod的JSON文件"""
-      try:
-        data = json.loads(content)
-        modid = data.get("id", filename.replace('.jar', ''))
-        version = data.get("version", "unknown")
-        return {"modid": modid, "version": version}
-      except:
-        return {"modid": filename.replace('.jar', ''), "version": "unknown"}
 
-    def _parse_mod_from_filename(self, filename):
-      """从文件名解析mod信息"""
-      # 移除.jar扩展名
-      name = filename.replace('.jar', '')
-
-      # 常见mod文件名模式: modname-version 或 modname_version
-      patterns = [
-        r'(.+?)[-_](\d+\.\d+(?:\.\d+)?(?:-.+)?)$',  # modname-1.2.3 或 modname_1.2.3
-        r'(.+?)[-_]v?(\d+(?:\.\d+)*(?:-.+)?)$',  # modname-v1.2.3 或 modname_v1.2.3
-      ]
-
-      for pattern in patterns:
-        match = re.match(pattern, name)
-        if match:
-          modid = match.group(1)
-          version = match.group(2)
-          # 确保modid不包含版本号部分
-          if version and not modid.endswith(version):
-            return {"modid": modid, "version": version}
-
-      # 如果无法从文件名提取版本，返回基本mod信息
-      return {"modid": name, "version": "unknown"}
-
-    def _extract_version_from_filename(self, filename):
-      """从文件名提取版本号"""
-      # 常见版本号模式
-      patterns = [
-        r'(\d+\.\d+(?:\.\d+)?(?:-.+)?)$',  # 1.2.3 或 1.2.3-alpha
-        r'[_-]v?(\d+(?:\.\d+)*(?:-.+)?)$',  # -v1.2.3 或 _1.2.3
-      ]
-
-      name = filename.replace('.jar', '')
-      for pattern in patterns:
-        match = re.search(pattern, name)
-        if match:
-          return match.group(1)
-
-      return "unknown"
 class MinecraftChatClient:
     """Minecraft聊天客户端，支持监听和发送聊天消息"""
 
@@ -1226,10 +1236,46 @@ class MinecraftChatClient:
         self.log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chat_logs")
         self.current_log_file = None
         self.server_name = f"{host}:{port}"
+        self.is_forge = False
+        self.forge_mods = []
+        self.channels = ["FML|HS", "FML", "FML|MP", "FORGE"]
 
         # 确保日志目录存在
         if not os.path.exists(self.log_dir):
             os.makedirs(self.log_dir)
+
+        # 创建mods配置目录
+        self.mods_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mods_config")
+        if not os.path.exists(self.mods_dir):
+            os.makedirs(self.mods_dir)
+
+        # 服务器标识符（用于文件名）
+        self.server_id = f"{self.host}_{self.port}".replace(".", "_").replace(":", "_")
+        self.mods_config_file = os.path.join(self.mods_dir, f"{self.server_id}.json")
+
+        # 尝试加载现有的mod配置
+        self.forge_mods = self._load_mods_config()
+
+    def _load_mods_config(self):
+        """加载现有的mod配置"""
+        if os.path.exists(self.mods_config_file):
+            try:
+                with open(self.mods_config_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception as e:
+                if DEBUG_MODE:
+                    print(f"[DEBUG] 加载mod配置失败: {e}")
+
+        # 如果没有配置或加载失败，返回默认的mod列表
+        return [
+            {"modid": "forge", "version": "40.2.0"},
+            {"modid": "minecraft", "version": self.version}
+        ]
+
+    def set_forge_mods(self, mods_list):
+        """设置Forge mod列表"""
+        self.forge_mods = mods_list
+        self.is_forge = len(mods_list) > 2  # 如果除了minecraft和forge外还有其他mod，则认为是Forge服务器
 
     def detect_server_version(self):
         """自动检测服务器版本"""
@@ -1309,50 +1355,50 @@ class MinecraftChatClient:
         self._send_login_start()
 
     def _send_handshake(self):
-      """发送握手包"""
-      if DEBUG_MODE:
-        print(f"[DEBUG] 发送握手包")
+        """发送握手包"""
+        if DEBUG_MODE:
+            print(f"[DEBUG] 发送握手包")
 
-      packet = bytearray()
+        packet = bytearray()
 
-      # 包ID (握手)
-      packet.extend(MinecraftQuery._pack_varint(0))
+        # 包ID (握手)
+        packet.extend(MinecraftQuery._pack_varint(0))
 
-      # 协议版本
-      packet.extend(MinecraftQuery._pack_varint(self.protocol_version))
+        # 协议版本
+        packet.extend(MinecraftQuery._pack_varint(self.protocol_version))
 
-      # 服务器地址
-      packet.extend(MinecraftQuery._pack_string(self.host))
+        # 服务器地址
+        packet.extend(MinecraftQuery._pack_string(self.host))
 
-      # 服务器端口
-      packet.extend(struct.pack('>H', self.port))
+        # 服务器端口
+        packet.extend(struct.pack('>H', self.port))
 
-      # 下一状态 (2 for login)
-      packet.extend(MinecraftQuery._pack_varint(2))
+        # 下一状态 (2 for login)
+        packet.extend(MinecraftQuery._pack_varint(2))
 
-      # 如果是Forge服务器，添加Forge特定的数据
-      if hasattr(self, 'forge_mods') and self.forge_mods:
-        # Forge握手数据
-        forge_data = bytearray()
+        # 如果是Forge服务器，添加Forge特定的数据
+        if self.is_forge and self.forge_mods:
+            # Forge握手数据
+            forge_data = bytearray()
 
-        # FML|HS标记
-        forge_data.extend(MinecraftQuery._pack_string("FML|HS"))
+            # FML|HS标记
+            forge_data.extend(MinecraftQuery._pack_string("FML|HS"))
 
-        # Forge版本信息
-        forge_data.extend(MinecraftQuery._pack_string("FML"))
-        forge_data.extend(MinecraftQuery._pack_varint(3))  # 协议版本
-        forge_data.extend(MinecraftQuery._pack_varint(len(self.forge_mods)))  # mod数量
+            # Forge版本信息
+            forge_data.extend(MinecraftQuery._pack_string("FML"))
+            forge_data.extend(MinecraftQuery._pack_varint(3))  # 协议版本
+            forge_data.extend(MinecraftQuery._pack_varint(len(self.forge_mods)))  # mod数量
 
-        # 添加每个mod的信息
-        for mod in self.forge_mods:
-          forge_data.extend(MinecraftQuery._pack_string(mod["modid"]))
-          forge_data.extend(MinecraftQuery._pack_string(mod["version"]))
+            # 添加每个mod的信息
+            for mod in self.forge_mods:
+                forge_data.extend(MinecraftQuery._pack_string(mod["modid"]))
+                forge_data.extend(MinecraftQuery._pack_string(mod["version"]))
 
-        # 将Forge数据添加到握手包
-        packet.extend(forge_data)
+            # 将Forge数据添加到握手包
+            packet.extend(forge_data)
 
-      # 发送包
-      self._send_packet(packet)
+        # 发送包
+        self._send_packet(packet)
 
     def _send_login_start(self):
         """发送登录开始包"""
@@ -1406,6 +1452,63 @@ class MinecraftChatClient:
                 print(f"[DEBUG] 接收数据包出错: {e}")
             return None
 
+    def _handle_forge_handshake(self, data):
+        """处理Forge握手响应"""
+        if DEBUG_MODE:
+            print(f"[DEBUG] 处理Forge握手响应")
+
+        try:
+            # 解析Forge响应
+            offset = 0
+
+            # 读取FML标记
+            fml_marker, varint_len = MinecraftQuery._read_varint_from_bytes(data[offset:])
+            offset += varint_len
+            fml_marker_str = data[offset:offset + fml_marker].decode('utf-8', errors='ignore')
+            offset += fml_marker
+
+            if fml_marker_str == "FML":
+                # 读取协议版本
+                protocol_version, varint_len = MinecraftQuery._read_varint_from_bytes(data[offset:])
+                offset += varint_len
+
+                if DEBUG_MODE:
+                    print(f"[DEBUG] Forge协议版本: {protocol_version}")
+
+                # 这里可以添加更多的Forge响应处理逻辑
+                return True
+        except Exception as e:
+            if DEBUG_MODE:
+                print(f"[DEBUG] 处理Forge握手响应失败: {e}")
+
+        return False
+
+    def _send_login_plugin_response(self, message_id, success=True, data=b''):
+        """发送Login Plugin Response"""
+        if DEBUG_MODE:
+            print(f"[DEBUG] 发送Login Plugin Response")
+
+        packet = bytearray()
+
+        # 包ID (Login Plugin Response)
+        packet.extend(MinecraftQuery._pack_varint(0x02))
+
+        # 消息ID
+        packet.extend(MinecraftQuery._pack_varint(message_id))
+
+        # 成功标志
+        packet.extend(b'\x01' if success else b'\x00')
+
+        # 数据
+        if success and data:
+            packet.extend(MinecraftQuery._pack_varint(len(data)))
+            packet.extend(data)
+        else:
+            packet.extend(MinecraftQuery._pack_varint(0))
+
+        # 发送包
+        self._send_packet(packet)
+
     def login(self):
         """执行登录流程"""
         if DEBUG_MODE:
@@ -1421,8 +1524,9 @@ class MinecraftChatClient:
                     break
 
                 # 解析包ID
-                packet_id = MinecraftQuery._read_varint_from_bytes(packet)[0]
-                offset = len(MinecraftQuery._pack_varint(packet_id))
+                packet_id, offset = MinecraftQuery._read_varint_from_bytes(packet)
+                if packet_id is None:
+                    continue
 
                 # 根据包ID处理
                 if packet_id == 0x03:  # Set Compression
@@ -1431,11 +1535,11 @@ class MinecraftChatClient:
                         print(f"[DEBUG] 压缩阈值设置为: {self.compression_threshold}")
 
                 elif packet_id == 0x02:  # Login Success
-                    uuid = MinecraftQuery._read_string_from_bytes(packet[offset:])
-                    offset += len(uuid) + 2
+                    uuid_str = MinecraftQuery._read_string_from_bytes(packet[offset:])
+                    offset += len(uuid_str) + 2
                     username = MinecraftQuery._read_string_from_bytes(packet[offset:])
                     if DEBUG_MODE:
-                        print(f"[DEBUG] 登录成功: {username} ({uuid})")
+                        print(f"[DEBUG] 登录成功: {username} ({uuid_str})")
                     return True
 
                 elif packet_id == 0x01:  # Encryption Request
@@ -1448,6 +1552,41 @@ class MinecraftChatClient:
                     if DEBUG_MODE:
                         print(f"[DEBUG] 服务器断开连接: {reason}")
                     return False
+
+                elif packet_id == 0x04:  # Login Plugin Request (Forge相关)
+                    if DEBUG_MODE:
+                        print(f"[DEBUG] 收到Login Plugin Request，处理Forge握手")
+
+                    # 读取消息ID
+                    message_id, varint_len = MinecraftQuery._read_varint_from_bytes(packet[offset:])
+                    offset += varint_len
+
+                    # 读取通道名称
+                    channel_len, varint_len = MinecraftQuery._read_varint_from_bytes(packet[offset:])
+                    offset += varint_len
+                    channel = packet[offset:offset + channel_len].decode('utf-8', errors='ignore')
+                    offset += channel_len
+
+                    # 读取数据
+                    data_len, varint_len = MinecraftQuery._read_varint_from_bytes(packet[offset:])
+                    offset += varint_len
+                    data = packet[offset:offset + data_len] if data_len > 0 else b''
+
+                    if DEBUG_MODE:
+                        print(f"[DEBUG] Login Plugin Request - 消息ID: {message_id}, 通道: {channel}, 数据长度: {data_len}")
+
+                    # 处理Forge握手
+                    if channel == "FML|HS":
+                        self._handle_forge_handshake(data)
+
+                    # 发送响应
+                    self._send_login_plugin_response(message_id, True)
+
+                # 添加对其他可能包的处理
+                else:
+                    if DEBUG_MODE:
+                        print(f"[DEBUG] 收到未知包ID: {packet_id}，长度: {len(packet)}")
+                    # 对于未知包，继续处理，不立即断开
 
             return False
         except Exception as e:
@@ -1605,182 +1744,11 @@ class MinecraftChatClient:
         if self.socket:
             self.socket.close()
 
-    # 在MinecraftChatClient类中添加以下方法
-
-    def _send_forge_handshake(self, packet):
-      """添加Forge握手数据到握手包"""
-      if DEBUG_MODE:
-        print(f"[DEBUG] 添加Forge握手数据")
-
-      # FML|HS标记
-      packet.extend(MinecraftQuery._pack_string("FML|HS"))
-
-      # Forge版本信息
-      packet.extend(MinecraftQuery._pack_string("FML"))
-      packet.extend(MinecraftQuery._pack_varint(3))  # 协议版本
-
-      # 添加mod数量
-      mod_count = len(self.forge_mods) if hasattr(self, 'forge_mods') and self.forge_mods else 0
-      packet.extend(MinecraftQuery._pack_varint(mod_count))
-
-      # 添加每个mod的信息
-      if mod_count > 0:
-        for mod in self.forge_mods:
-          packet.extend(MinecraftQuery._pack_string(mod.get("modid", "unknown")))
-          packet.extend(MinecraftQuery._pack_string(mod.get("version", "unknown")))
-
-      return packet
-
-    def _handle_forge_handshake(self, packet_data):
-      """处理Forge握手响应"""
-      if DEBUG_MODE:
-        print(f"[DEBUG] 处理Forge握手响应")
-
-      try:
-        # 解析Forge响应
-        offset = 0
-
-        # 读取FML标记
-        fml_marker, varint_len = MinecraftQuery._read_varint_from_bytes(packet_data[offset:])
-        offset += varint_len
-        fml_marker_str = packet_data[offset:offset + fml_marker].decode('utf-8', errors='ignore')
-        offset += fml_marker
-
-        if fml_marker_str == "FML":
-          # 读取协议版本
-          protocol_version, varint_len = MinecraftQuery._read_varint_from_bytes(packet_data[offset:])
-          offset += varint_len
-
-          if DEBUG_MODE:
-            print(f"[DEBUG] Forge协议版本: {protocol_version}")
-
-          # 这里可以添加更多的Forge响应处理逻辑
-          return True
-      except Exception as e:
-        if DEBUG_MODE:
-          print(f"[DEBUG] 处理Forge握手响应失败: {e}")
-
-      return False
-
-    # 修改_send_handshake方法
-    def _send_handshake(self):
-      """发送握手包（增强Forge兼容性）"""
-      if DEBUG_MODE:
-        print(f"[DEBUG] 发送增强版握手包")
-
-      packet = bytearray()
-
-      # 包ID (握手)
-      packet.extend(MinecraftQuery._pack_varint(0))
-
-      # 协议版本
-      packet.extend(MinecraftQuery._pack_varint(self.protocol_version))
-
-      # 服务器地址
-      packet.extend(MinecraftQuery._pack_string(self.host))
-
-      # 服务器端口
-      packet.extend(struct.pack('>H', self.port))
-
-      # 下一状态 (2 for login)
-      packet.extend(MinecraftQuery._pack_varint(2))
-
-      # 如果是Forge服务器，添加Forge特定的数据
-      if hasattr(self, 'forge_mods') and self.forge_mods:
-        packet = self._send_forge_handshake(packet)
-
-      # 发送包
-      self._send_packet(packet)
-
-    # 修改login方法中的包处理逻辑
-    def login(self):
-      """执行登录流程（增强Forge兼容性）"""
-      if DEBUG_MODE:
-        print(f"[DEBUG] 开始增强版登录流程")
-
-      try:
-        self.connect()
-
-        # 处理登录响应
-        while True:
-          packet = self.receive_packet()
-          if packet is None:
-            break
-
-          # 解析包ID
-          packet_id = MinecraftQuery._read_varint_from_bytes(packet)[0]
-          offset = len(MinecraftQuery._pack_varint(packet_id))
-
-          # 根据包ID处理
-          if packet_id == 0x03:  # Set Compression
-            self.compression_threshold = MinecraftQuery._read_varint_from_bytes(packet[offset:])[0]
-            if DEBUG_MODE:
-              print(f"[DEBUG] 压缩阈值设置为: {self.compression_threshold}")
-
-          elif packet_id == 0x02:  # Login Success
-            uuid = MinecraftQuery._read_string_from_bytes(packet[offset:])
-            offset += len(uuid) + 2
-            username = MinecraftQuery._read_string_from_bytes(packet[offset:])
-            if DEBUG_MODE:
-              print(f"[DEBUG] 登录成功: {username} ({uuid})")
-            return True
-
-          elif packet_id == 0x01:  # Encryption Request
-            if DEBUG_MODE:
-              print(f"[DEBUG] 服务器要求加密，当前不支持")
-            return False
-
-          elif packet_id == 0x00:  # Disconnect
-            reason = packet[offset:].decode('utf-8', errors='ignore')
-            if DEBUG_MODE:
-              print(f"[DEBUG] 服务器断开连接: {reason}")
-            return False
-
-          elif packet_id == 0x04:  # Login Plugin Request (Forge相关)
-            if DEBUG_MODE:
-              print(f"[DEBUG] 收到Login Plugin Request，尝试处理Forge握手")
-
-            # 读取消息ID
-            message_id, varint_len = MinecraftQuery._read_varint_from_bytes(packet[offset:])
-            offset += varint_len
-
-            # 读取通道名称
-            channel_len, varint_len = MinecraftQuery._read_varint_from_bytes(packet[offset:])
-            offset += varint_len
-            channel = packet[offset:offset + channel_len].decode('utf-8', errors='ignore')
-            offset += channel_len
-
-            # 读取数据
-            data_len, varint_len = MinecraftQuery._read_varint_from_bytes(packet[offset:])
-            offset += varint_len
-            data = packet[offset:offset + data_len] if data_len > 0 else b''
-
-            if DEBUG_MODE:
-              print(f"[DEBUG] Login Plugin Request - 消息ID: {message_id}, 通道: {channel}, 数据长度: {data_len}")
-
-            # 处理Forge握手
-            if channel == "FML|HS":
-              self._handle_forge_handshake(data)
-
-            # 发送响应
-            response = bytearray()
-            response.extend(MinecraftQuery._pack_varint(0x02))  # 包ID
-            response.extend(MinecraftQuery._pack_varint(message_id))  # 相同的消息ID
-            response.extend(b'\x01')  # 成功标志
-            response.extend(MinecraftQuery._pack_varint(0))  # 无数据
-            self._send_packet(response)
-
-          # 添加对其他可能包的处理
-          else:
-            if DEBUG_MODE:
-              print(f"[DEBUG] 收到未知包ID: {packet_id}，长度: {len(packet)}")
-            # 对于未知包，继续处理，不立即断开
-
-        return False
-      except Exception as e:
-        if DEBUG_MODE:
-          print(f"[DEBUG] 登录过程中发生错误: {e}")
-        return False
+    def stop(self):
+        """停止监听"""
+        self.running = False
+        if self.socket:
+            self.socket.close()
 
 
 # 服务器信息查询接口类

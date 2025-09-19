@@ -64,6 +64,40 @@ except ImportError:
 # 全局聊天客户端实例
 global_chat_client = None
 
+# === Forge/FML mod 列表缓存与探测 ===
+from forge_login_client import get_mods_from_server
+
+MODS_DIR = os.path.join(SCRIPT_DIR, "mods_config")
+
+def load_cached_mods(host: str, port: int) -> list:
+    os.makedirs(MODS_DIR, exist_ok=True)
+    fname = f"{host.replace('.', '_')}_{port}.json"
+    path = os.path.join(MODS_DIR, fname)
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return []
+
+def save_mods(host: str, port: int, mods: list):
+    os.makedirs(MODS_DIR, exist_ok=True)
+    fname = f"{host.replace('.', '_')}_{port}.json"
+    path = os.path.join(MODS_DIR, fname)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(mods, f, ensure_ascii=False, indent=2)
+
+def query_and_cache_mods(host: str, port: int, username: str, mods_hint=None) -> list:
+    cached = load_cached_mods(host, port)
+    if cached:
+        print(f"[i] Loaded {len(cached)} mods from cache.")
+        return cached
+    print("[i] No cache, querying server...")
+    mods = get_mods_from_server(host, port, username, mods_hint)
+    save_mods(host, port, mods)
+    return mods
+
 class MinecraftPing:
     """改进的MC服务器ping实现，支持Java版和基岩版"""
 

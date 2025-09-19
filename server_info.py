@@ -1751,6 +1751,43 @@ class MinecraftChatClient:
             self.socket.close()
 
 
+
+# === Forge/FML mod 探测与缓存集成 ===
+import os
+import json
+from forge_login_client import get_mods_from_server
+
+MODS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mods_config")
+
+def load_cached_mods(host: str, port: int) -> list:
+    os.makedirs(MODS_DIR, exist_ok=True)
+    fname = f"{host.replace('.', '_')}_{port}.json"
+    path = os.path.join(MODS_DIR, fname)
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return []
+
+def save_mods(host: str, port: int, mods: list):
+    os.makedirs(MODS_DIR, exist_ok=True)
+    fname = f"{host.replace('.', '_')}_{port}.json"
+    path = os.path.join(MODS_DIR, fname)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(mods, f, ensure_ascii=False, indent=2)
+
+def query_and_cache_mods(host: str, port: int, username: str, mods_hint=None) -> list:
+    cached = load_cached_mods(host, port)
+    if cached:
+        print(f"[i] Loaded {len(cached)} mods from cache.")
+        return cached
+    print("[i] No cache, querying server...")
+    mods = get_mods_from_server(host, port, username, mods_hint)
+    save_mods(host, port, mods)
+    return mods
+
 # 服务器信息查询接口类
 class ServerInfoInterface:
     """服务器信息查询接口，用于与server.py协同工作"""
@@ -1758,16 +1795,7 @@ class ServerInfoInterface:
     @staticmethod
     def get_detailed_info(host, port, server_type="auto", timeout=5):
         """
-        获取服务器的详细信息
-
-        参数:
-            host: 服务器地址
-            port: 服务器端口
-            server_type: 服务器类型
-            timeout: 超时时间
-
-        返回:
-            包含详细信息的字典
+        获取服务器的详细信息，集成 mod 探测与缓存
         """
         if DEBUG_MODE:
             print(f"[DEBUG] 获取服务器详细信息: {host}:{port}")
@@ -1775,20 +1803,15 @@ class ServerInfoInterface:
         # 使用MinecraftQuery获取基本信息
         result = MinecraftQuery.ping(host, port, timeout, server_type)
 
-        # 添加额外的详细信息
-        if "error" not in result:
-            # 这里可以添加更多详细信息查询逻辑
-            # 例如：获取完整玩家列表、mod信息等
-
-            # 如果是Java版服务器，尝试获取更多信息
-            if result.get("server_type") == "java":
-                # 可以添加更多Java版特定信息查询
-                pass
-
-            # 如果是基岩版服务器，尝试获取更多信息
-            elif result.get("server_type") == "bedrock":
-                # 可以添加更多基岩版特定信息查询
-                pass
+        # 集成 mod 探测与缓存（仅Java版）
+        if "error" not in result and result.get("server_type") == "java":
+            # 优先用缓存，否则主动探测
+            mods = load_cached_mods(host, port)
+            if not mods:
+                # 尝试用 get_mods_from_server 主动探测
+                mods = get_mods_from_server(host, port, "QueryBot")
+                save_mods(host, port, mods)
+            result["mods"] = mods
 
         return result
 
@@ -1796,15 +1819,6 @@ class ServerInfoInterface:
     def get_player_list(host, port, server_type="auto", timeout=5):
         """
         获取服务器的完整玩家列表
-
-        参数:
-            host: 服务器地址
-            port: 服务器端口
-            server_type: 服务器类型
-            timeout: 超时时间
-
-        返回:
-            玩家列表
         """
         if DEBUG_MODE:
             print(f"[DEBUG] 获取玩家列表: {host}:{port}")
@@ -1823,18 +1837,9 @@ class ServerInfoInterface:
         return result.get("players", {}).get("sample", [])
 
     @staticmethod
-    def get_mod_list(host, port, server_type="auto", timeout=5):
+    def get_mod_list(host, port, server_type="auto", timeout=5, username="QueryBot"):
         """
-        获取服务器的mod列表
-
-        参数:
-            host: 服务器地址
-            port: 服务器端口
-            server_type: 服务器类型
-            timeout: 超时时间
-
-        返回:
-            mod列表
+        获取服务器的mod列表，优先缓存，必要时主动探测
         """
         if DEBUG_MODE:
             print(f"[DEBUG] 获取mod列表: {host}:{port}")
@@ -1843,17 +1848,25 @@ class ServerInfoInterface:
         if server_type != "java":
             return []
 
-        # 使用MinecraftQuery获取服务器信息
-        result = MinecraftQuery.ping(host, port, timeout, server_type)
+        # 优先用缓存
+        mods = load_cached_mods(host, port)
+        if mods:
+            return mods
 
-        if "error" in result:
-            return []
+        # 主动探测
+        mods = get_mods_from_server(host, port, username)
+        save_mods(host, port, mods)
+        return mods
 
-        # 检查是否为Forge服务器并返回mod列表
-        if result.get("forge", False) and "mods" in result:
-            return result["mods"]
-
-        return []  # 默认返回空列表
+# 统一外部接口，便于 server.py 调用
+def query_server_info(host, port, username="QueryBot", server_type="java"):
+    """
+    统一接口：返回详细信息和 mod 列表，优先缓存，必要时主动探测
+    """
+    info = ServerInfoInterface.get_detailed_info(host, port, server_type)
+    mods = ServerInfoInterface.get_mod_list(host, port, server_type, username=username)
+    info["mods"] = mods
+    return info
 
 
 # 使用示例

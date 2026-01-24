@@ -16,6 +16,7 @@ import random
 # 配置文件路径
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 JSON_FILE = os.path.join(SCRIPT_DIR, "servers.json")
+CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
 
 # 检测操作系统并设置颜色支持
 IS_WINDOWS = os.name == 'nt'
@@ -226,6 +227,13 @@ class MinecraftPing:
     # SRV记录缓存
     srv_cache = {}
     SRV_CACHE_DURATION = 300  # SRV记录缓存5分钟
+
+    @staticmethod
+    def clear_all_caches():
+        """清除所有缓存"""
+        MinecraftPing.cache.clear()
+        MinecraftPing.srv_cache.clear()
+        print(f"{Colors.GREEN}已清除所有服务器查询缓存和SRV记录缓存{Colors.RESET}")
 
     @staticmethod
     def detect_server_type(host, port=25565, timeout=3):
@@ -660,11 +668,46 @@ class ServerManager:
     def __init__(self):
         self.servers = []
         self.current_page = 0
-        self.page_size = 10
+        # 加载页面设置
+        self.page_size = self.load_page_size() or 10
         self.sort_field = 'name'  # 默认排序字段
         self.sort_order = 'asc'   # 默认排序顺序
         self.filter_type = 'all'  # 默认筛选类型：all, java, bedrock
         self.load_servers()
+
+    def load_page_size(self):
+        """从配置文件加载每页显示数量"""
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                    return config.get('page_size', 10)
+            except Exception:
+                pass
+        return None
+
+    def save_page_size(self):
+        """保存每页显示数量到配置文件"""
+        try:
+            # 读取现有配置或创建新配置
+            if os.path.exists(CONFIG_FILE):
+                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+            else:
+                config = {}
+            
+            # 更新配置
+            config['page_size'] = self.page_size
+            
+            # 保存配置
+            with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+            
+            print(f"{Colors.GREEN}已保存页面设置: 每页 {self.page_size} 个服务器{Colors.RESET}")
+            return True
+        except Exception as e:
+            print(f"{Colors.YELLOW}保存配置失败: {str(e)}{Colors.RESET}")
+            return False
 
     def load_servers(self):
         """从JSON文件加载服务器列表，保持向后兼容"""
@@ -1702,7 +1745,7 @@ class ServerManager:
 
       return True
 
-def print_help():
+def print_help(manager):
     """打印帮助信息"""
     print(f"\n{Colors.BOLD}可用命令:{Colors.RESET}")
     print(f"  {Colors.GREEN}n{Colors.RESET}: 下一页")
@@ -1713,8 +1756,9 @@ def print_help():
     print(f"  {Colors.GREEN}u{Colors.RESET}: 更新服务器信息")
     print(f"  {Colors.GREEN}s{Colors.RESET}: 保存服务器列表")
     print(f"  {Colors.GREEN}r{Colors.RESET}: 刷新当前页")
+    print(f"  {Colors.GREEN}clear{Colors.RESET}: 强制清除所有缓存")
     print(f"  {Colors.GREEN}o{Colors.RESET}: 排序服务器")
-    print(f"  {Colors.GREEN}c{Colors.RESET}: 更改每页显示数量")
+    print(f"  {Colors.GREEN}c{Colors.RESET}: 更改每页显示数量 (当前: {manager.page_size})")
     print(f"  {Colors.GREEN}f{Colors.RESET}: 筛选服务器类型")
     print(f"  {Colors.GREEN}players <序号>{Colors.RESET}: 查看指定服务器的完整玩家列表")
     print(f"  {Colors.GREEN}info <序号>{Colors.RESET}: 查看指定服务器的详细信息")
@@ -1758,8 +1802,7 @@ def main():
     manager = ServerManager()
 
     print(f"{Colors.BOLD}Minecraft 服务器管理器{Colors.RESET}")
-    print(f"{Colors.CYAN}已加载 {len(manager.servers)} 个服务器{Colors.RESET}")
-    # 移除了启动时显示帮助信息的代码
+    print(f"{Colors.CYAN}已加载 {len(manager.servers)} 个服务器，每页显示 {manager.page_size} 个{Colors.RESET}")
 
     while True:
         # 显示当前页
@@ -1768,10 +1811,10 @@ def main():
 
         # 用户命令
         try:
-          cmd = input(f"\n{Colors.BOLD}命令 (h=帮助):{Colors.RESET} ").strip().lower()
+            cmd = input(f"\n{Colors.BOLD}命令 (h=帮助, 当前第{manager.current_page + 1}/{manager.max_page() + 1}页):{Colors.RESET} ").strip().lower()
         except (KeyboardInterrupt, EOFError):
-          print(f"\n{Colors.YELLOW}返回主菜单...{Colors.RESET}")
-          continue
+            print(f"\n{Colors.YELLOW}返回主菜单...{Colors.RESET}")
+            continue
 
         if cmd == 'n':  # 下一页
             if manager.current_page < manager.max_page():
@@ -1792,6 +1835,8 @@ def main():
                     print(f"{Colors.RED}页码超出范围 (1-{manager.max_page() + 1}){Colors.RESET}")
             except ValueError:
                 print(f"{Colors.RED}请输入有效数字!{Colors.RESET}")
+            except (KeyboardInterrupt, EOFError):
+                print(f"\n{Colors.YELLOW}操作取消{Colors.RESET}")
         elif cmd == 'a':  # 添加服务器
             try:
                 name = input("服务器名称: ").strip()
@@ -1858,6 +1903,8 @@ def main():
                 })
             except KeyboardInterrupt:
                 print(f"\n{Colors.YELLOW}操作取消{Colors.RESET}")
+            except EOFError:
+                print(f"\n{Colors.YELLOW}操作取消{Colors.RESET}")
         elif cmd == 'd':  # 删除服务器
             try:
                 index = int(input("输入要删除的序号: ").strip()) - 1
@@ -1868,6 +1915,8 @@ def main():
                     print(f"{Colors.RED}无效的序号{Colors.RESET}")
             except ValueError:
                 print(f"{Colors.RED}请输入有效数字!{Colors.RESET}")
+            except (KeyboardInterrupt, EOFError):
+                print(f"\n{Colors.YELLOW}操作取消{Colors.RESET}")
         elif cmd == 'u':  # 更新服务器
             try:
                 index = int(input("输入要更新的序号: ").strip()) - 1
@@ -1897,6 +1946,8 @@ def main():
                     print(f"{Colors.RED}无效的序号{Colors.RESET}")
             except (ValueError, KeyError):
                 print(f"{Colors.RED}输入无效!{Colors.RESET}")
+            except (KeyboardInterrupt, EOFError):
+                print(f"\n{Colors.YELLOW}操作取消{Colors.RESET}")
         elif cmd == 's':  # 保存
             if manager.save_servers():
                 print(f"{Colors.GREEN}保存成功!{Colors.RESET}")
@@ -1905,41 +1956,61 @@ def main():
             # 清除缓存
             MinecraftPing.cache.clear()
             MinecraftPing.srv_cache.clear()
+        elif cmd == 'clear':  # 强制清除所有缓存
+            print(f"{Colors.GREEN}清除所有缓存...{Colors.RESET}")
+            MinecraftPing.clear_all_caches()
         elif cmd == 'o':  # 排序
-            print(f"{Colors.CYAN}可用排序字段: name, ip, port, type{Colors.RESET}")
-            field = input("排序字段: ").strip().lower()
-            if field in ['name', 'ip', 'port', 'type']:
-                order = input("排序顺序 (asc/desc): ").strip().lower() or 'asc'
-                if order not in ['asc', 'desc']:
-                    order = 'asc'
-                manager.sort_servers(field, order)
-                manager.current_page = 0  # 排序后回到第一页
-            else:
-                print(f"{Colors.RED}无效的排序字段{Colors.RESET}")
+            try:
+                print(f"{Colors.CYAN}可用排序字段: name, ip, port, type{Colors.RESET}")
+                field = input("排序字段: ").strip().lower()
+                if field in ['name', 'ip', 'port', 'type']:
+                    order = input("排序顺序 (asc/desc): ").strip().lower() or 'asc'
+                    if order not in ['asc', 'desc']:
+                        order = 'asc'
+                    manager.sort_servers(field, order)
+                    manager.current_page = 0  # 排序后回到第一页
+                else:
+                    print(f"{Colors.RED}无效的排序字段{Colors.RESET}")
+            except (KeyboardInterrupt, EOFError):
+                print(f"\n{Colors.YELLOW}操作取消{Colors.RESET}")
         elif cmd == 'c':  # 更改每页数量
             try:
-                new_size = int(input("每页显示数量 (1-50): ").strip())
+                new_size = int(input(f"每页显示数量 (1-50, 当前: {manager.page_size}): ").strip())
                 if 1 <= new_size <= 50:
+                    old_page = manager.current_page
                     manager.page_size = new_size
+                    
+                    # 保存页面设置到配置文件
+                    manager.save_page_size()
+                    
+                    # 调整当前页码，确保不会超出范围
+                    max_page = manager.max_page()
+                    if old_page > max_page:
+                        manager.current_page = max_page
+                    
                     print(f"{Colors.GREEN}每页显示数量已改为 {new_size}{Colors.RESET}")
-                    manager.current_page = 0  # 回到第一页
                 else:
                     print(f"{Colors.RED}数量必须在1-50之间{Colors.RESET}")
             except ValueError:
                 print(f"{Colors.RED}请输入有效数字!{Colors.RESET}")
+            except (KeyboardInterrupt, EOFError):
+                print(f"\n{Colors.YELLOW}操作取消{Colors.RESET}")
         elif cmd == 'f':  # 筛选服务器类型
-            print(f"{Colors.CYAN}可用筛选选项:{Colors.RESET}")
-            print(f"  {Colors.GREEN}all{Colors.RESET}: 显示所有服务器")
-            print(f"  {Colors.GREEN}java{Colors.RESET}: 仅显示Java版服务器")
-            print(f"  {Colors.GREEN}bedrock{Colors.RESET}: 仅显示基岩版服务器")
+            try:
+                print(f"{Colors.CYAN}可用筛选选项:{Colors.RESET}")
+                print(f"  {Colors.GREEN}all{Colors.RESET}: 显示所有服务器")
+                print(f"  {Colors.GREEN}java{Colors.RESET}: 仅显示Java版服务器")
+                print(f"  {Colors.GREEN}bedrock{Colors.RESET}: 仅显示基岩版服务器")
 
-            filter_type = input("选择筛选类型: ").strip().lower()
-            if filter_type in ['all', 'java', 'bedrock']:
-                manager.filter_type = filter_type
-                manager.current_page = 0  # 回到第一页
-                print(f"{Colors.GREEN}已筛选: {filter_type}{Colors.RESET}")
-            else:
-                print(f"{Colors.RED}无效的筛选类型{Colors.RESET}")
+                filter_type = input("选择筛选类型: ").strip().lower()
+                if filter_type in ['all', 'java', 'bedrock']:
+                    manager.filter_type = filter_type
+                    manager.current_page = 0  # 回到第一页
+                    print(f"{Colors.GREEN}已筛选: {filter_type}{Colors.RESET}")
+                else:
+                    print(f"{Colors.RED}无效的筛选类型{Colors.RESET}")
+            except (KeyboardInterrupt, EOFError):
+                print(f"\n{Colors.YELLOW}操作取消{Colors.RESET}")
         elif cmd.startswith('players '):  # 查看玩家列表
             try:
                 parts = cmd.split()
@@ -2021,6 +2092,8 @@ def main():
                     })
             except KeyboardInterrupt:
                 print(f"\n{Colors.YELLOW}操作取消{Colors.RESET}")
+            except EOFError:
+                print(f"\n{Colors.YELLOW}操作取消{Colors.RESET}")
         elif cmd == 'scanall':  # 扫描所有端口
             try:
                 host = input("输入要扫描的IP地址或域名: ").strip()
@@ -2060,51 +2133,53 @@ def main():
                     })
             except KeyboardInterrupt:
                 print(f"\n{Colors.YELLOW}操作取消{Colors.RESET}")
+            except EOFError:
+                print(f"\n{Colors.YELLOW}操作取消{Colors.RESET}")
         elif cmd in ['h', 'help']:  # 帮助
-            print_help()
+            print_help(manager)
         elif cmd == 'q':  # 退出
             print(f"{Colors.GREEN}再见!{Colors.RESET}")
             break
         elif cmd.startswith('mods '):  # 配置Mod列表
             try:
-              parts = cmd.split()
-              if len(parts) < 2:
-                print(f"{Colors.RED}请指定服务器序号{Colors.RESET}")
-                continue
+                parts = cmd.split()
+                if len(parts) < 2:
+                    print(f"{Colors.RED}请指定服务器序号{Colors.RESET}")
+                    continue
 
-              index = int(parts[1]) - 1
-              actual_index = manager.current_page * manager.page_size + index
+                index = int(parts[1]) - 1
+                actual_index = manager.current_page * manager.page_size + index
 
-              if 0 <= actual_index < len(manager.servers):
-                server = manager.servers[actual_index]
+                if 0 <= actual_index < len(manager.servers):
+                    server = manager.servers[actual_index]
 
-                if server.get('type', 'java') != 'java':
-                  print(f"{Colors.RED}只有Java版服务器需要配置Mod{Colors.RESET}")
-                  continue
+                    if server.get('type', 'java') != 'java':
+                        print(f"{Colors.RED}只有Java版服务器需要配置Mod{Colors.RESET}")
+                        continue
 
-                print(f"{Colors.CYAN}正在为 {server['name']} 配置Mod...{Colors.RESET}")
+                    print(f"{Colors.CYAN}正在为 {server['name']} 配置Mod...{Colors.RESET}")
 
-                if not SERVER_INFO_AVAILABLE:
-                  print(f"{Colors.RED}Mod配置需要server_info模块，但未找到{Colors.RESET}")
-                  continue
+                    if not SERVER_INFO_AVAILABLE:
+                        print(f"{Colors.RED}Mod配置需要server_info模块，但未找到{Colors.RESET}")
+                        continue
 
-                # 创建MinecraftLogin实例并选择mods文件夹
-                from server_info import MinecraftLogin
-                login = MinecraftLogin(server['ip'], server.get('port', 25565), server.get('chat_username', 'Player'))
-                mods_list = login.select_mods_folder()
+                    # 创建MinecraftLogin实例并选择mods文件夹
+                    from server_info import MinecraftLogin
+                    login = MinecraftLogin(server['ip'], server.get('port', 25565), server.get('chat_username', 'Player'))
+                    mods_list = login.select_mods_folder()
 
-                if mods_list:
-                  server['mod_list'] = mods_list
-                  manager.save_servers()
-                  print(f"{Colors.GREEN}已成功配置 {len(mods_list)} 个Mod{Colors.RESET}")
+                    if mods_list:
+                        server['mod_list'] = mods_list
+                        manager.save_servers()
+                        print(f"{Colors.GREEN}已成功配置 {len(mods_list)} 个Mod{Colors.RESET}")
+                    else:
+                        print(f"{Colors.YELLOW}未选择Mod或选择失败{Colors.RESET}")
                 else:
-                  print(f"{Colors.YELLOW}未选择Mod或选择失败{Colors.RESET}")
-              else:
-                print(f"{Colors.RED}无效的服务器序号{Colors.RESET}")
+                    print(f"{Colors.RED}无效的服务器序号{Colors.RESET}")
             except ValueError:
-              print(f"{Colors.RED}请输入有效的服务器序号{Colors.RESET}")
+                print(f"{Colors.RED}请输入有效的服务器序号{Colors.RESET}")
             except Exception as e:
-              print(f"{Colors.RED}配置Mod时出错: {str(e)}{Colors.RESET}")
+                print(f"{Colors.RED}配置Mod时出错: {str(e)}{Colors.RESET}")
         else:
             print(f"{Colors.RED}未知命令 (输入'h'查看帮助){Colors.RESET}")
 

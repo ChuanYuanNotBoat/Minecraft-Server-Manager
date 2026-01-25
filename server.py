@@ -17,6 +17,7 @@ import random
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 JSON_FILE = os.path.join(SCRIPT_DIR, "servers.json")
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
+MODS_DIR = os.path.join(SCRIPT_DIR, "mods_config")
 
 # 检测操作系统并设置颜色支持
 IS_WINDOWS = os.name == 'nt'
@@ -24,8 +25,7 @@ IS_WINDOWS = os.name == 'nt'
 # ANSI 颜色代码
 class Colors:
     if IS_WINDOWS:
-        # Windows下启用ANSI转义序列支持
-        os.system('')  # 这行命令启用Windows 10+的ANSI转义序列支持
+        os.system('')  # 启用Windows 10+的ANSI转义序列支持
 
     BLACK = '\033[30m'
     RED = '\033[91m'
@@ -51,8 +51,14 @@ class Colors:
     BG_CYAN = '\033[46m'
     BG_WHITE = '\033[47m'
 
-# 全局查询取消标志
+# 全局变量
 global_cancel_query = False
+global_chat_client = None
+
+# 服务器类型常量
+SERVER_TYPE_JAVA = "java"
+SERVER_TYPE_BEDROCK = "bedrock"
+SERVER_TYPE_UNKNOWN = "unknown"
 
 # 尝试导入server_info模块
 try:
@@ -62,13 +68,45 @@ except ImportError:
     SERVER_INFO_AVAILABLE = False
     print(f"{Colors.YELLOW}警告: 未找到server_info模块，详细查询功能将受限{Colors.RESET}")
 
-# 全局聊天客户端实例
-global_chat_client = None
+# === 监控事件类 ===
+class MonitorEvent:
+    """监控事件类"""
+    def __init__(self, event_type, message, timestamp=None, player_name=None):
+        self.event_type = event_type  # status_change, player_join, player_leave, info
+        self.message = message
+        self.timestamp = timestamp or time.time()
+        self.player_name = player_name
+        self.color = self._get_color()
+    
+    def _get_color(self):
+        """根据事件类型获取颜色"""
+        if self.event_type == 'status_change':
+            if "上线" in self.message:
+                return Colors.GREEN
+            elif "下线" in self.message:
+                return Colors.RED
+            return Colors.YELLOW
+        elif self.event_type == 'player_join':
+            return Colors.GREEN
+        elif self.event_type == 'player_leave':
+            return Colors.RED
+        else:
+            return Colors.CYAN
+    
+    def format_time(self):
+        """格式化时间戳"""
+        dt = datetime.fromtimestamp(self.timestamp)
+        return dt.strftime("%H:%M:%S.%f")[:-3]  # 毫秒精度
+    
+    def __str__(self):
+        return f"{Colors.CYAN}[{self.format_time()}]{self.color} {self.message}{Colors.RESET}"
 
 # === Forge/FML mod 列表缓存与探测 ===
-from forge_login_client import get_mods_from_server
-
-MODS_DIR = os.path.join(SCRIPT_DIR, "mods_config")
+try:
+    from forge_login_client import get_mods_from_server
+except ImportError:
+    def get_mods_from_server(host, port, username, mods_hint=None):
+        return []
 
 def load_cached_mods(host: str, port: int) -> list:
     os.makedirs(MODS_DIR, exist_ok=True)
@@ -89,38 +127,14 @@ def save_mods(host: str, port: int, mods: list):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(mods, f, ensure_ascii=False, indent=2)
 
-def query_and_cache_mods(host: str, port: int, username: str, mods_hint=None) -> list:
-    cached = load_cached_mods(host, port)
-    if cached:
-        print(f"[i] Loaded {len(cached)} mods from cache.")
-        return cached
-    print("[i] No cache, querying server...")
-    mods = get_mods_from_server(host, port, username, mods_hint)
-    save_mods(host, port, mods)
-    return mods
-
+# === DNS 工具类 ===
 class DNSUtils:
     """DNS解析工具类，包含SRV记录解析功能"""
     
     @staticmethod
     def resolve_srv_record(hostname):
-        """
-        解析Minecraft SRV记录
-        格式：_minecraft._tcp.example.com
-        返回：(实际主机名, 实际端口) 或 None
-        """
+        """解析Minecraft SRV记录"""
         try:
-            # 尝试使用socket.getaddrinfo (适用于大多数系统)
-            import socket
-            # 尝试A记录解析
-            try:
-                socket.getaddrinfo(hostname, None)
-                # 如果能解析A记录，直接返回None（没有SRV记录）
-                return None
-            except socket.gaierror:
-                # A记录解析失败，尝试构造SRV记录查询
-                pass
-                
             # 方法1: 使用dnspython库（如果可用）
             try:
                 import dns.resolver
@@ -128,7 +142,6 @@ class DNSUtils:
                 try:
                     answers = dns.resolver.resolve(srv_hostname, 'SRV')
                     if answers:
-                        # 取第一个SRV记录（通常只有一个）
                         srv_record = answers[0]
                         target_host = str(srv_record.target).rstrip('.')
                         port = srv_record.port
@@ -137,22 +150,19 @@ class DNSUtils:
                 except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
                     pass
             except ImportError:
-                # dnspython不可用，尝试其他方法
                 pass
                 
-            # 方法2: 使用系统命令（跨平台）
+            # 方法2: 使用系统命令
             import subprocess
             import platform
             
             srv_hostname = f"_minecraft._tcp.{hostname}"
             
             if platform.system() == 'Windows':
-                # Windows使用nslookup
                 try:
                     result = subprocess.run(['nslookup', '-type=SRV', srv_hostname], 
                                           capture_output=True, text=True, timeout=5)
                     if result.returncode == 0:
-                        # 解析nslookup输出
                         lines = result.stdout.split('\n')
                         for line in lines:
                             if 'svr hostname' in line.lower() or '=' in line:
@@ -160,8 +170,6 @@ class DNSUtils:
                                 if len(parts) >= 2:
                                     target_info = parts[1].strip().split()
                                     if len(target_info) >= 4:
-                                        priority = int(target_info[0])
-                                        weight = int(target_info[1])
                                         port = int(target_info[2])
                                         target_host = target_info[3].rstrip('.')
                                         print(f"{Colors.CYAN}[DNS] 发现SRV记录: {target_host}:{port}{Colors.RESET}")
@@ -169,7 +177,6 @@ class DNSUtils:
                 except:
                     pass
             else:
-                # Linux/Mac使用dig
                 try:
                     result = subprocess.run(['dig', '+short', 'SRV', srv_hostname], 
                                           capture_output=True, text=True, timeout=5)
@@ -178,8 +185,6 @@ class DNSUtils:
                         for line in lines:
                             parts = line.split()
                             if len(parts) >= 4:
-                                priority = int(parts[0])
-                                weight = int(parts[1])
                                 port = int(parts[2])
                                 target_host = parts[3].rstrip('.')
                                 print(f"{Colors.CYAN}[DNS] 发现SRV记录: {target_host}:{port}{Colors.RESET}")
@@ -194,39 +199,30 @@ class DNSUtils:
     
     @staticmethod
     def resolve_with_fallback(original_host, original_port=25565, timeout=3):
-        """
-        智能解析主机名，优先尝试SRV记录，失败则使用原始地址
-        返回：(解析后的主机名, 解析后的端口, 是否使用了SRV记录)
-        """
+        """智能解析主机名"""
         try:
-            # 先尝试SRV记录解析
             srv_result = DNSUtils.resolve_srv_record(original_host)
             if srv_result:
                 resolved_host, resolved_port = srv_result
                 return resolved_host, resolved_port, True
                 
-            # SRV记录不存在，尝试直接A记录解析
             import socket
             socket.getaddrinfo(original_host, original_port)
             return original_host, original_port, False
             
         except socket.gaierror as e:
-            # DNS解析失败
             raise Exception(f"DNS解析失败: {original_host}: {str(e)}")
         except Exception as e:
-            # 其他异常
             raise Exception(f"解析失败: {original_host}:{original_port}: {str(e)}")
 
+# === Minecraft Ping 类 ===
 class MinecraftPing:
-    """改进的MC服务器ping实现，支持Java版和基岩版，包含SRV记录解析"""
-
-    # 缓存结果（服务器地址 -> (结果, 过期时间)）
-    cache = {}
-    CACHE_DURATION = 60  # 缓存时间（秒）
+    """改进的MC服务器ping实现"""
     
-    # SRV记录缓存
+    cache = {}
     srv_cache = {}
-    SRV_CACHE_DURATION = 300  # SRV记录缓存5分钟
+    CACHE_DURATION = 60
+    SRV_CACHE_DURATION = 300
 
     @staticmethod
     def clear_all_caches():
@@ -239,36 +235,80 @@ class MinecraftPing:
     def detect_server_type(host, port=25565, timeout=3):
         """尝试自动检测服务器类型"""
         try:
-            # 先尝试Java版
             result = MinecraftPing.ping_java(host, port, timeout)
             if 'error' not in result:
-                return "java"
+                return SERVER_TYPE_JAVA
 
-            # 再尝试基岩版（使用默认基岩版端口）
             result = MinecraftPing.ping_bedrock(host, 19132, timeout)
             if 'error' not in result:
-                return "bedrock"
+                return SERVER_TYPE_BEDROCK
 
-            # 如果指定了非默认端口，也尝试基岩版
             if port != 19132:
                 result = MinecraftPing.ping_bedrock(host, port, timeout)
                 if 'error' not in result:
-                    return "bedrock"
+                    return SERVER_TYPE_BEDROCK
 
         except Exception:
             pass
 
-        return "unknown"
+        return SERVER_TYPE_UNKNOWN
 
     @staticmethod
-    def ping(host, port=25565, timeout=3, use_cache=True, server_type="java"):
+    def ping(host, port=25565, timeout=3, use_cache=True, server_type=SERVER_TYPE_JAVA):
         global global_cancel_query
 
-        # 检查取消标志
         if global_cancel_query:
             return {"error": "查询已取消", "connect_time": 0, "query_time": 0}
 
-        # 检查SRV记录缓存
+        # SRV记录处理
+        resolved_host, resolved_port, used_srv = MinecraftPing._resolve_with_srv(host, port)
+        
+        cache_key = f"{resolved_host}:{resolved_port}:{server_type}"
+        if use_cache and cache_key in MinecraftPing.cache:
+            cached_data, expiry = MinecraftPing.cache[cache_key]
+            if time.time() < expiry:
+                if used_srv:
+                    cached_data['srv_info'] = MinecraftPing._create_srv_info(host, port, resolved_host, resolved_port)
+                return cached_data
+
+        try:
+            # 根据服务器类型选择ping方法
+            if server_type == SERVER_TYPE_BEDROCK:
+                result = MinecraftPing.ping_bedrock(resolved_host, resolved_port, timeout)
+            else:
+                result = MinecraftPing.ping_java(resolved_host, resolved_port, timeout)
+
+            result['query_timestamp'] = time.time()
+            
+            if used_srv:
+                result['srv_info'] = MinecraftPing._create_srv_info(host, port, resolved_host, resolved_port)
+                result['original_address'] = f"{host}:{port}"
+                result['resolved_address'] = f"{resolved_host}:{resolved_port}"
+
+            MinecraftPing.cache[cache_key] = (result, time.time() + MinecraftPing.CACHE_DURATION)
+            return result
+        except Exception as e:
+            # SRV记录失败回退
+            if used_srv:
+                print(f"{Colors.YELLOW}[DNS] SRV记录查询失败，尝试回退到原始地址: {host}:{port}{Colors.RESET}")
+                try:
+                    if server_type == SERVER_TYPE_BEDROCK:
+                        result = MinecraftPing.ping_bedrock(host, port, timeout)
+                    else:
+                        result = MinecraftPing.ping_java(host, port, timeout)
+                    
+                    if 'error' not in result:
+                        result['query_timestamp'] = time.time()
+                        result['srv_fallback'] = True
+                        return result
+                except Exception:
+                    pass
+                    
+            return MinecraftPing._create_error_result(str(e), server_type)
+
+    @staticmethod
+    def _resolve_with_srv(host, port):
+        """解析SRV记录"""
         srv_cache_key = f"srv:{host}"
         resolved_host = host
         resolved_port = port
@@ -281,14 +321,12 @@ class MinecraftPing:
                 used_srv = True
                 print(f"{Colors.CYAN}[DNS] 使用缓存的SRV记录: {resolved_host}:{resolved_port}{Colors.RESET}")
         
-        # 如果没有缓存的SRV记录，尝试解析
         if not used_srv:
             try:
                 srv_result = DNSUtils.resolve_srv_record(host)
                 if srv_result:
                     resolved_host, resolved_port = srv_result
                     used_srv = True
-                    # 缓存SRV记录
                     MinecraftPing.srv_cache[srv_cache_key] = (
                         (resolved_host, resolved_port), 
                         time.time() + MinecraftPing.SRV_CACHE_DURATION
@@ -296,64 +334,28 @@ class MinecraftPing:
             except Exception as e:
                 print(f"{Colors.YELLOW}[DNS] SRV记录解析失败，使用原始地址: {str(e)}{Colors.RESET}")
 
-        # 更新缓存键以包含解析后的地址
-        cache_key = f"{resolved_host}:{resolved_port}:{server_type}"
-        if use_cache and cache_key in MinecraftPing.cache:
-            cached_data, expiry = MinecraftPing.cache[cache_key]
-            if time.time() < expiry:
-                # 添加SRV记录信息
-                if used_srv:
-                    cached_data['srv_info'] = {
-                        'original_host': host,
-                        'original_port': port,
-                        'resolved_host': resolved_host,
-                        'resolved_port': resolved_port
-                    }
-                return cached_data
+        return resolved_host, resolved_port, used_srv
 
-        try:
-            # 根据服务器类型选择ping方法
-            if server_type == "bedrock":
-                result = MinecraftPing.ping_bedrock(resolved_host, resolved_port, timeout)
-            else:  # 默认为Java版
-                result = MinecraftPing.ping_java(resolved_host, resolved_port, timeout)
+    @staticmethod
+    def _create_srv_info(original_host, original_port, resolved_host, resolved_port):
+        """创建SRV信息字典"""
+        return {
+            'original_host': original_host,
+            'original_port': original_port,
+            'resolved_host': resolved_host,
+            'resolved_port': resolved_port
+        }
 
-            # 添加查询时间戳
-            result['query_timestamp'] = time.time()
-            
-            # 添加SRV记录信息（如果使用了SRV记录）
-            if used_srv:
-                result['srv_info'] = {
-                    'original_host': host,
-                    'original_port': port,
-                    'resolved_host': resolved_host,
-                    'resolved_port': resolved_port
-                }
-                result['original_address'] = f"{host}:{port}"
-                result['resolved_address'] = f"{resolved_host}:{resolved_port}"
-
-            # 更新缓存
-            MinecraftPing.cache[cache_key] = (result, time.time() + MinecraftPing.CACHE_DURATION)
-
-            return result
-        except Exception as e:
-            # 如果使用了SRV记录但失败，尝试回退到原始地址
-            if used_srv:
-                print(f"{Colors.YELLOW}[DNS] SRV记录查询失败，尝试回退到原始地址: {host}:{port}{Colors.RESET}")
-                try:
-                    if server_type == "bedrock":
-                        result = MinecraftPing.ping_bedrock(host, port, timeout)
-                    else:
-                        result = MinecraftPing.ping_java(host, port, timeout)
-                    
-                    if 'error' not in result:
-                        result['query_timestamp'] = time.time()
-                        result['srv_fallback'] = True
-                        return result
-                except Exception as e2:
-                    pass
-                    
-            return {"error": str(e), "connect_time": 0, "query_time": 0, "motd": "", "server_type": server_type}
+    @staticmethod
+    def _create_error_result(error_msg, server_type):
+        """创建错误结果"""
+        return {
+            "error": error_msg,
+            "connect_time": 0,
+            "query_time": 0,
+            "motd": "",
+            "server_type": server_type
+        }
 
     @staticmethod
     def ping_java(host, port=25565, timeout=3):
@@ -361,20 +363,16 @@ class MinecraftPing:
         global global_cancel_query
 
         try:
-            # 解析主机名
             try:
                 ip = socket.getaddrinfo(host, port, socket.AF_INET)[0][4][0]
             except socket.gaierror:
-                # 如果getaddrinfo失败，尝试直接使用主机名
                 ip = host
             except:
                 ip = host
 
-            # 创建TCP连接
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(timeout)
 
-            # 设置超时连接
             start_time = time.time()
             sock.connect((ip, port))
             connect_time = int((time.time() - start_time) * 1000)
@@ -382,48 +380,38 @@ class MinecraftPing:
             # 构建握手包
             protocol_version = -1
             handshake = bytearray()
-            handshake.append(0x00)  # 包ID (Handshake)
+            handshake.append(0x00)
             handshake.extend(MinecraftPing._pack_varint(protocol_version))
             handshake.extend(MinecraftPing._pack_string(host))
             handshake.extend(struct.pack('>H', port))
-            handshake.extend(MinecraftPing._pack_varint(1))  # Next state: status
+            handshake.extend(MinecraftPing._pack_varint(1))
 
-            # 构建完整包
             packet = bytearray()
             packet.extend(MinecraftPing._pack_varint(len(handshake)))
             packet.extend(handshake)
 
-            # 发送状态请求包
-            request = b'\x01\x00'  # Packet ID (0x01) + length (0)
-
-            # 发送数据
+            request = b'\x01\x00'
             sock.sendall(packet)
             sock.sendall(request)
 
-            # 使用select处理超时
             ready = select.select([sock], [], [], timeout)
             if not ready[0]:
                 raise Exception("服务器响应超时")
 
-            # 读取响应长度
             resp_length = MinecraftPing._read_varint(sock)
             if resp_length < 1:
                 raise Exception("无效的响应长度")
 
-            # 读取响应ID
             resp_id = MinecraftPing._read_varint(sock)
             if resp_id != 0x00:
                 raise Exception(f"无效的响应ID: {resp_id}")
 
-            # 读取JSON长度
             json_length = MinecraftPing._read_varint(sock)
             if json_length < 1:
                 raise Exception("无效的JSON长度")
 
-            # 读取JSON数据
             json_data = b''
             while len(json_data) < json_length:
-                # 检查取消标志
                 if global_cancel_query:
                     sock.close()
                     return {"error": "查询已取消", "connect_time": 0, "query_time": 0}
@@ -433,21 +421,17 @@ class MinecraftPing:
                     raise Exception("连接中断")
                 json_data += chunk
 
-            # 关闭连接
             sock.close()
 
-            # 解析JSON
             result = json.loads(json_data.decode('utf-8'))
             result['connect_time'] = connect_time
             result['query_time'] = int((time.time() - start_time) * 1000)
-
-            # 解析公告栏
             result['motd'] = MinecraftPing.parse_motd(result.get('description', ''))
-            result['server_type'] = 'java'
+            result['server_type'] = SERVER_TYPE_JAVA
 
             return result
         except Exception as e:
-            return {"error": str(e), "connect_time": 0, "query_time": 0, "motd": "", "server_type": "java"}
+            return MinecraftPing._create_error_result(str(e), SERVER_TYPE_JAVA)
 
     @staticmethod
     def ping_bedrock(host, port=19132, timeout=3):
@@ -455,58 +439,42 @@ class MinecraftPing:
         global global_cancel_query
 
         try:
-            # 解析主机名
             try:
                 ip = socket.getaddrinfo(host, port, socket.AF_INET)[0][4][0]
             except:
                 ip = host
 
-            # 创建UDP连接
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.settimeout(timeout)
 
-            # 构建未连接ping包
             packet = bytearray()
-            packet.extend(b'\x01')  # 包ID (Unconnected Ping)
-            packet.extend(struct.pack('>Q', int(time.time() * 1000)))  # 时间戳
-            packet.extend(b'\x00\x00\x00\x00\x00\x00\x00\x00')  # Magic
-            packet.extend(struct.pack('>Q', 0))  # 客户端GUID
+            packet.extend(b'\x01')
+            packet.extend(struct.pack('>Q', int(time.time() * 1000)))
+            packet.extend(b'\x00\x00\x00\x00\x00\x00\x00\x00')
+            packet.extend(struct.pack('>Q', 0))
 
-            # 设置超时连接
             start_time = time.time()
-
-            # 发送数据
             sock.sendto(packet, (ip, port))
-
-            # 接收响应
             data, addr = sock.recvfrom(4096)
-
-            # 关闭连接
             sock.close()
 
             query_time = int((time.time() - start_time) * 1000)
 
-            # 解析响应
-            if data[0] != 0x1C:  # Unconnected Pong
+            if data[0] != 0x1C:
                 raise Exception("无效的响应包")
 
-            # 跳过时间戳和服务器GUID
-            offset = 1 + 8 + 8 + 16  # 包ID + 时间戳 + 服务器GUID + Magic
-
-            # 读取服务器信息字符串 - 修复编码问题
+            offset = 1 + 8 + 8 + 16
             try:
                 server_info_str = data[offset:].decode('utf-8')
             except UnicodeDecodeError:
-                # 如果UTF-8解码失败，尝试使用latin-1编码
                 server_info_str = data[offset:].decode('latin-1')
 
             server_info = server_info_str.split(';')
 
-            # 解析服务器信息
             result = {
-                'server_type': 'bedrock',
+                'server_type': SERVER_TYPE_BEDROCK,
                 'query_time': query_time,
-                'connect_time': query_time,  # UDP没有单独的连接时间
+                'connect_time': query_time,
                 'edition': server_info[0] if len(server_info) > 0 else '',
                 'motd_line1': server_info[1] if len(server_info) > 1 else '',
                 'protocol_version': server_info[2] if len(server_info) > 2 else '',
@@ -521,16 +489,11 @@ class MinecraftPing:
                 'port_ipv6': int(server_info[11]) if len(server_info) > 11 and server_info[11].isdigit() else 0,
             }
 
-            # 构建MOTD
             result['motd'] = MinecraftPing.parse_motd(f"{result.get('motd_line1', '')}\n{result.get('submotd', '')}")
-
-            # 构建玩家信息（与Java版格式保持一致）
             result['players'] = {
                 'online': result['online_players'],
                 'max': result['max_players']
             }
-
-            # 构建版本信息（与Java版格式保持一致）
             result['version'] = {
                 'name': result.get('version', ''),
                 'protocol': result.get('protocol_version', '')
@@ -538,16 +501,15 @@ class MinecraftPing:
 
             return result
         except Exception as e:
-            return {"error": str(e), "connect_time": 0, "query_time": 0, "motd": "", "server_type": "bedrock"}
+            return MinecraftPing._create_error_result(str(e), SERVER_TYPE_BEDROCK)
 
     @staticmethod
     def parse_motd(motd_data):
-        """解析公告栏数据，支持字符串和对象格式"""
+        """解析公告栏数据"""
         if isinstance(motd_data, str):
-            # 处理字符串格式的MOTD
-            return MinecraftPing.convert_mc_formatting(motd_data)
+            # 移除颜色代码，但保留原始文本
+            return MinecraftPing.clean_mc_formatting(motd_data)
         elif isinstance(motd_data, dict):
-            # 处理JSON对象格式的MOTD
             return MinecraftPing.parse_motd_object(motd_data)
         return ""
 
@@ -556,11 +518,9 @@ class MinecraftPing:
         """解析JSON对象格式的公告栏"""
         text = ""
 
-        # 提取基本文本
         if 'text' in motd_obj:
             text += motd_obj['text']
 
-        # 处理额外文本部分
         if 'extra' in motd_obj and isinstance(motd_obj['extra'], list):
             for extra in motd_obj['extra']:
                 if isinstance(extra, dict):
@@ -568,13 +528,11 @@ class MinecraftPing:
                 elif isinstance(extra, str):
                     text += extra
 
-        # 应用格式化和颜色
-        return MinecraftPing.convert_mc_formatting(text)
+        return MinecraftPing.clean_mc_formatting(text)
 
     @staticmethod
     def convert_mc_formatting(text):
         """将Minecraft格式代码转换为ANSI颜色代码"""
-        # 格式代码映射
         formatting_map = {
             '§0': Colors.BLACK,
             '§1': Colors.BLUE,
@@ -592,7 +550,7 @@ class MinecraftPing:
             '§d': Colors.MAGENTA + Colors.BOLD,
             '§e': Colors.YELLOW + Colors.BOLD,
             '§f': Colors.WHITE + Colors.BOLD,
-            '§k': Colors.MAGENTA,  # 混淆文本（随机字符）
+            '§k': Colors.MAGENTA,
             '§l': Colors.BOLD,
             '§m': Colors.STRIKETHROUGH,
             '§n': Colors.UNDERLINE,
@@ -600,20 +558,33 @@ class MinecraftPing:
             '§r': Colors.RESET
         }
 
-        # 替换所有格式代码
         for code, ansi in formatting_map.items():
             text = text.replace(code, ansi)
-
-        # 确保最后有重置代码
-        if not text.endswith(Colors.RESET):
-            text += Colors.RESET
 
         return text
 
     @staticmethod
+    def clean_mc_formatting(text):
+        """清理Minecraft格式代码，移除颜色代码但不转换"""
+        # 简单的正则表达式来移除§加一个字符的格式代码
+        import re
+        return re.sub(r'§[0-9a-fklmnor]', '', text)
+
+    @staticmethod
+    def safe_convert_mc_formatting(text, context_color=Colors.RESET):
+        """安全地转换Minecraft格式代码，确保不会溢出到程序输出"""
+        # 首先转换颜色代码
+        converted = MinecraftPing.convert_mc_formatting(text)
+        # 确保在字符串末尾重置颜色
+        if not converted.endswith(Colors.RESET):
+            converted += Colors.RESET
+        # 确保回到上下文颜色
+        converted += context_color
+        return converted
+
+    @staticmethod
     def _pack_varint(value):
         """将整数打包为VarInt格式"""
-        # 处理负数
         if value < 0:
             value = (1 << 32) + value
 
@@ -630,14 +601,13 @@ class MinecraftPing:
 
     @staticmethod
     def _read_varint(sock):
-        """从socket读取VarInt，带超时处理"""
+        """从socket读取VarInt"""
         result = 0
         shift = 0
         timeout_count = 0
-        max_timeouts = 3  # 最多容忍3次超时
+        max_timeouts = 3
 
         while timeout_count < max_timeouts:
-            # 使用select确保有数据可读
             ready = select.select([sock], [], [], 1)
             if ready[0]:
                 data = sock.recv(1)
@@ -662,17 +632,347 @@ class MinecraftPing:
         data = s.encode('utf-8')
         return MinecraftPing._pack_varint(len(data)) + data
 
+# === 服务器监控器 ===
+class ServerMonitor:
+    """服务器监控器"""
+    
+    def __init__(self, manager, server_index):
+        self.manager = manager
+        self.server_index = server_index
+        self.server = manager.servers[server_index]
+        self.events = deque(maxlen=100)  # 最多保存100条事件
+        self.last_result = None
+        self.last_players = set()
+        self.is_running = False
+        self.refresh_interval = 30  # 默认30秒刷新
+        
+    def start(self):
+        """开始监控"""
+        self.is_running = True
+        self.events.clear()
+        
+        # 添加开始监控事件
+        self.add_event('info', f"开始监控服务器: {self.server['name']}")
+        
+        try:
+            while self.is_running:
+                # 查询服务器状态
+                self.check_server_status()
+                
+                # 显示当前状态和事件
+                self.display_status()
+                
+                # 等待用户输入或刷新间隔
+                if not self.wait_for_input():
+                    break
+                    
+        except KeyboardInterrupt:
+            print(f"\n{Colors.YELLOW}监控已中断{Colors.RESET}")
+        finally:
+            self.is_running = False
+            self.add_event('info', f"停止监控服务器: {self.server['name']}")
+    
+    def check_server_status(self):
+        """检查服务器状态变化"""
+        server = self.server
+        server_type = server.get('type', SERVER_TYPE_JAVA)
+        port = server.get('port', 25565 if server_type == SERVER_TYPE_JAVA else 19132)
+        
+        # 查询服务器
+        current_result = MinecraftPing.ping(
+            server['ip'], port, timeout=5, 
+            use_cache=False, server_type=server_type
+        )
+        
+        # 检查服务器状态变化
+        if self.last_result is not None:
+            last_online = 'error' not in self.last_result
+            current_online = 'error' not in current_result
+            
+            if last_online != current_online:
+                if current_online:
+                    self.add_event('status_change', f"服务器状态: 离线 → 上线")
+                else:
+                    error_msg = current_result.get('error', '未知错误')
+                    self.add_event('status_change', f"服务器状态: 上线 → 离线 ({error_msg})")
+        
+        # 检查玩家变化（仅Java版且在线）
+        if server_type == SERVER_TYPE_JAVA and 'error' not in current_result:
+            current_players = set()
+            if ('players' in current_result and 
+                'sample' in current_result['players']):
+                for player in current_result['players']['sample']:
+                    player_name = player.get('name', '未知')
+                    # 清理玩家名字中的颜色代码
+                    clean_name = MinecraftPing.clean_mc_formatting(player_name)
+                    current_players.add(clean_name)
+            
+            if self.last_players is not None:
+                # 玩家加入
+                new_players = current_players - self.last_players
+                for player in new_players:
+                    self.add_event('player_join', f"玩家加入: {player}", player_name=player)
+                
+                # 玩家退出
+                left_players = self.last_players - current_players
+                for player in left_players:
+                    self.add_event('player_leave', f"玩家退出: {player}", player_name=player)
+            
+            self.last_players = current_players
+        
+        self.last_result = current_result
+    
+    def add_event(self, event_type, message, player_name=None):
+        """添加事件到事件列表"""
+        event = MonitorEvent(event_type, message, player_name=player_name)
+        self.events.append(event)
+    
+    def display_status(self):
+        """显示服务器状态和事件"""
+        import os
+        
+        # 清屏（跨平台）
+        os.system('cls' if os.name == 'nt' else 'clear')
+        
+        # 显示标题和控制信息
+        print(f"{Colors.BOLD}{Colors.CYAN}服务器监控: {self.server['name']}{Colors.RESET}")
+        print(f"{Colors.CYAN}地址: {self.server['ip']}:{self.server.get('port', 25565)}{Colors.RESET}")
+        print(f"{Colors.CYAN}刷新间隔: {self.refresh_interval}秒 | 事件数量: {len(self.events)}{Colors.RESET}")
+        print(f"{Colors.YELLOW}按 'q' 返回，'+'/-' 调整刷新间隔，'r' 立即刷新{Colors.RESET}")
+        print("=" * 80)
+        
+        # 显示服务器详细信息（与主查询相同的格式）
+        self.display_server_details()
+        
+        print("=" * 80)
+        
+        # 显示最近的事件
+        self.display_event_log()
+        
+        print("=" * 80)
+        print(f"{Colors.CYAN}按 'q' 返回，'+'/-' 调整刷新间隔，'r' 立即刷新{Colors.RESET}")
+    
+    def display_server_details(self):
+        """显示服务器详细信息（与主查询相同的格式）"""
+        server = self.server
+        server_type = server.get('type', SERVER_TYPE_JAVA)
+        
+        # 序号颜色
+        index_color = Colors.CYAN
+        if self.last_result and 'error' in self.last_result and ("离线" in self.last_result['error'] or "timed out" in self.last_result['error']):
+            index_color = Colors.RED
+        elif self.last_result and 'players' in self.last_result and self.last_result['players'].get('online', 0) > 0:
+            index_color = Colors.GREEN
+
+        # 服务器类型标识
+        server_type = self.last_result.get('server_type', server.get('type', SERVER_TYPE_JAVA)) if self.last_result else server.get('type', SERVER_TYPE_JAVA)
+        type_display = f" [{Colors.MAGENTA}基岩版{Colors.RESET}]" if server_type == SERVER_TYPE_BEDROCK else f" [{Colors.BLUE}Java版{Colors.RESET}]"
+
+        print(f"\n{index_color}[监控中]{Colors.RESET} {Colors.BOLD}{server['name']}{type_display}{Colors.RESET}")
+        print(f"{Colors.BLUE}地址:{Colors.RESET} {server['ip']}:{server.get('port', 25565 if server_type == SERVER_TYPE_JAVA else 19132)}")
+        
+        # 显示SRV解析信息
+        if self.last_result and 'srv_info' in self.last_result:
+            srv_info = self.last_result['srv_info']
+            print(f"{Colors.CYAN}SRV解析:{Colors.RESET} {srv_info['original_host']}:{srv_info['original_port']} → {srv_info['resolved_host']}:{srv_info['resolved_port']}")
+
+        if 'note' in server and server['note']:
+            print(f"{Colors.YELLOW}备注:{Colors.RESET} {server['note']}")
+
+        # 显示最后查询时间
+        if server.get('last_query', 0) > 0:
+            last_query_time = datetime.fromtimestamp(server['last_query']).strftime('%Y-%m-%d %H:%M:%S')
+            print(f"{Colors.YELLOW}上次查询:{Colors.RESET} {last_query_time}")
+
+        # 显示公告栏
+        if self.last_result and 'motd' in self.last_result and self.last_result['motd']:
+            # 计算终端宽度
+            try:
+                terminal_width = os.get_terminal_size().columns
+            except:
+                terminal_width = 80
+
+            # 分隔线
+            print(f"{Colors.CYAN}┌{'─' * (terminal_width - 2)}┐{Colors.RESET}")
+
+            # 显示公告栏内容
+            motd = self.last_result['motd']
+            print(f"{Colors.CYAN}│{Colors.RESET} {motd}")
+
+            # 分隔线
+            print(f"{Colors.CYAN}└{'─' * (terminal_width - 2)}┘{Colors.RESET}")
+
+        if not self.last_result:
+            print(f"{Colors.YELLOW}状态: 等待第一次查询...{Colors.RESET}")
+        elif 'error' in self.last_result:
+            # 离线状态
+            if "timed out" in self.last_result['error'] or "离线" in self.last_result['error']:
+                error_color = Colors.RED
+            else:
+                error_color = Colors.YELLOW
+
+            print(f"{error_color}状态: {self.last_result['error']}{Colors.RESET}")
+            if self.last_result.get('connect_time', 0) > 0:
+                print(f"{Colors.BLUE}连接时间:{Colors.RESET} {self.last_result['connect_time']}ms")
+        else:
+            # 服务器版本
+            version = self.last_result.get('version', {}).get('name', '未知')
+            if server_type == SERVER_TYPE_BEDROCK:
+                version_color = Colors.MAGENTA
+                version_display = f"{version}"
+            else:
+                if '1.21' in version or '1.20' in version:
+                    version_color = Colors.GREEN
+                elif '1.19' in version or '1.18' in version:
+                    version_color = Colors.YELLOW
+                else:
+                    version_color = Colors.RED
+                version_display = f"{version}"
+
+            print(f"{Colors.BLUE}版本:{Colors.RESET} {version_color}{version_display}{Colors.RESET}")
+
+            # 玩家数量
+            players = self.last_result.get('players', {})
+            online = players.get('online', 0)
+            max_players = players.get('max', 0)
+
+            # 根据在线人数选择颜色
+            if online == 0:
+                player_color = Colors.RED
+            elif online < max_players * 0.5:
+                player_color = Colors.YELLOW
+            else:
+                player_color = Colors.GREEN
+
+            print(f"{Colors.BLUE}玩家:{Colors.RESET} {player_color}{online}{Colors.RESET}/{max_players}")
+
+            # 显示玩家列表（如果可用）
+            if server_type != SERVER_TYPE_BEDROCK and 'players' in self.last_result and 'sample' in self.last_result['players']:
+                sample_players = self.last_result['players']['sample']
+                if sample_players and len(sample_players) > 0:
+                    print(f"{Colors.BLUE}在线玩家:{Colors.RESET}")
+                    for player in sample_players[:5]:  # 最多显示5个
+                        player_name = player.get('name', '未知')
+                        # 安全地转换玩家名字中的颜色代码
+                        safe_name = MinecraftPing.safe_convert_mc_formatting(player_name, Colors.RESET)
+                        print(f"  {Colors.GREEN}•{Colors.RESET} {safe_name}")
+
+                    # 如果还有更多玩家，显示提示
+                    if len(sample_players) > 5:
+                        print(f"  {Colors.CYAN}... 还有 {len(sample_players) - 5} 个玩家{Colors.RESET}")
+
+            # 延迟信息
+            if self.last_result.get('query_time', 0) > 0:
+                delay_color = Colors.GREEN
+                if self.last_result['query_time'] > 500:
+                    delay_color = Colors.YELLOW
+                if self.last_result['query_time'] > 1000:
+                    delay_color = Colors.RED
+
+                delay_info = f"{Colors.BLUE}延迟:{Colors.RESET} {delay_color}{self.last_result['query_time']}ms{Colors.RESET}"
+                if self.last_result.get('connect_time', 0) > 0:
+                    delay_info += f" ({Colors.BLUE}连接:{Colors.RESET} {self.last_result['connect_time']}ms)"
+                print(delay_info)
+
+            # 基岩版特定信息
+            if server_type == SERVER_TYPE_BEDROCK:
+                if 'game_mode' in self.last_result and self.last_result['game_mode']:
+                    print(f"{Colors.BLUE}游戏模式:{Colors.RESET} {self.last_result['game_mode']}")
+                if 'edition' in self.last_result and self.last_result['edition']:
+                    print(f"{Colors.BLUE}版本:{Colors.RESET} {self.last_result['edition']}")
+    
+    def display_event_log(self):
+        """显示事件日志"""
+        print(f"\n{Colors.BOLD}事件日志:{Colors.RESET}")
+        
+        # 获取终端高度
+        try:
+            terminal_height = os.get_terminal_size().lines
+            max_events = max(5, terminal_height - 30)  # 留出空间显示其他信息
+        except:
+            max_events = 10
+        
+        if len(self.events) > max_events:
+            events_to_show = list(self.events)[-max_events:]
+            print(f"{Colors.CYAN}显示最近 {len(events_to_show)} 条事件 (共 {len(self.events)} 条){Colors.RESET}")
+        else:
+            events_to_show = list(self.events)
+        
+        if not events_to_show:
+            print(f"  {Colors.YELLOW}暂无事件{Colors.RESET}")
+            return
+            
+        for event in events_to_show:
+            print(f"  {event}")
+    
+    def wait_for_input(self):
+        """等待用户输入或刷新间隔"""
+        start_time = time.time()
+        
+        while time.time() - start_time < self.refresh_interval:
+            # 检查是否有输入（非阻塞）
+            if IS_WINDOWS:
+                # Windows平台使用msvcrt
+                try:
+                    import msvcrt
+                    if msvcrt.kbhit():
+                        key = msvcrt.getch().decode('utf-8', errors='ignore').lower()
+                        if key == 'q':
+                            return False
+                        elif key == '+':
+                            self.refresh_interval = min(300, self.refresh_interval + 5)
+                            self.add_event('info', f"刷新间隔增加至 {self.refresh_interval}秒")
+                            return True  # 立即刷新显示
+                        elif key == '-':
+                            self.refresh_interval = max(5, self.refresh_interval - 5)
+                            self.add_event('info', f"刷新间隔减少至 {self.refresh_interval}秒")
+                            return True  # 立即刷新显示
+                        elif key == 'r':
+                            self.add_event('info', "手动刷新")
+                            return True  # 立即刷新显示
+                except ImportError:
+                    # 如果没有msvcrt，使用简单的time.sleep
+                    pass
+            else:
+                # Unix-like平台使用select
+                try:
+                    if sys.stdin in select.select([sys.stdin], [], [], 0.1)[0]:
+                        try:
+                            key = sys.stdin.read(1).lower()
+                            if key == 'q':
+                                return False
+                            elif key == '+':
+                                self.refresh_interval = min(300, self.refresh_interval + 5)
+                                self.add_event('info', f"刷新间隔增加至 {self.refresh_interval}秒")
+                                return True  # 立即刷新显示
+                            elif key == '-':
+                                self.refresh_interval = max(5, self.refresh_interval - 5)
+                                self.add_event('info', f"刷新间隔减少至 {self.refresh_interval}秒")
+                                return True  # 立即刷新显示
+                            elif key == 'r':
+                                self.add_event('info', "手动刷新")
+                                return True  # 立即刷新显示
+                        except (KeyboardInterrupt, EOFError):
+                            return False
+                except:
+                    # select可能失败，使用简单的time.sleep
+                    pass
+            
+            time.sleep(0.1)
+        
+        return True  # 继续监控
+
+# === 服务器管理器 ===
 class ServerManager:
     """服务器管理核心类"""
 
     def __init__(self):
         self.servers = []
         self.current_page = 0
-        # 加载页面设置
         self.page_size = self.load_page_size() or 10
-        self.sort_field = 'name'  # 默认排序字段
-        self.sort_order = 'asc'   # 默认排序顺序
-        self.filter_type = 'all'  # 默认筛选类型：all, java, bedrock
+        self.sort_field = 'name'
+        self.sort_order = 'asc'
+        self.filter_type = 'all'
         self.load_servers()
 
     def load_page_size(self):
@@ -689,17 +989,14 @@ class ServerManager:
     def save_page_size(self):
         """保存每页显示数量到配置文件"""
         try:
-            # 读取现有配置或创建新配置
             if os.path.exists(CONFIG_FILE):
                 with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                     config = json.load(f)
             else:
                 config = {}
             
-            # 更新配置
             config['page_size'] = self.page_size
             
-            # 保存配置
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
             
@@ -710,31 +1007,20 @@ class ServerManager:
             return False
 
     def load_servers(self):
-        """从JSON文件加载服务器列表，保持向后兼容"""
+        """从JSON文件加载服务器列表"""
         if os.path.exists(JSON_FILE):
             try:
                 with open(JSON_FILE, 'r', encoding='utf-8') as f:
                     self.servers = json.load(f)
 
-                # 确保每个服务器都有type字段（向后兼容）
+                # 向后兼容性处理
                 for server in self.servers:
-                    if 'type' not in server:
-                        server['type'] = 'java'  # 默认为Java版
-                    # 添加最后查询时间字段（向后兼容）
-                    if 'last_query' not in server:
-                        server['last_query'] = 0
-                    # 添加查询历史字段（向后兼容）
-                    if 'query_history' not in server:
-                        server['query_history'] = deque(maxlen=10)
-                    # 添加玩家历史字段（向后兼容）
-                    if 'player_history' not in server:
-                        server['player_history'] = deque(maxlen=10)
-                    # 添加mod列表字段（向后兼容）
-                    if 'mod_list' not in server:
-                        server['mod_list'] = []
-                    # 添加聊天用户名字段（向后兼容）
-                    if 'chat_username' not in server:
-                        server['chat_username'] = f"Player{random.randint(1000, 9999)}"
+                    server.setdefault('type', SERVER_TYPE_JAVA)
+                    server.setdefault('last_query', 0)
+                    server.setdefault('query_history', deque(maxlen=10))
+                    server.setdefault('player_history', deque(maxlen=10))
+                    server.setdefault('mod_list', [])
+                    server.setdefault('chat_username', f"Player{random.randint(1000, 9999)}")
 
                 print(f"{Colors.CYAN}已加载 {len(self.servers)} 个服务器{Colors.RESET}")
             except Exception as e:
@@ -749,20 +1035,18 @@ class ServerManager:
         try:
             # 将deque转换为list以便JSON序列化
             for server in self.servers:
-                if 'query_history' in server and isinstance(server['query_history'], deque):
-                    server['query_history'] = list(server['query_history'])
-                if 'player_history' in server and isinstance(server['player_history'], deque):
-                    server['player_history'] = list(server['player_history'])
+                for key in ['query_history', 'player_history']:
+                    if key in server and isinstance(server[key], deque):
+                        server[key] = list(server[key])
 
             with open(JSON_FILE, 'w', encoding='utf-8') as f:
                 json.dump(self.servers, f, indent=2, ensure_ascii=False)
 
             # 恢复deque结构
             for server in self.servers:
-                if 'query_history' in server and isinstance(server['query_history'], list):
-                    server['query_history'] = deque(server['query_history'], maxlen=10)
-                if 'player_history' in server and isinstance(server['player_history'], list):
-                    server['player_history'] = deque(server['player_history'], maxlen=10)
+                for key in ['query_history', 'player_history']:
+                    if key in server and isinstance(server[key], list):
+                        server[key] = deque(server[key], maxlen=10)
 
             return True
         except Exception as e:
@@ -771,12 +1055,13 @@ class ServerManager:
 
     def add_server(self, server):
         """添加新服务器"""
-        # 添加必要的历史字段
-        server['last_query'] = 0
-        server['query_history'] = deque(maxlen=10)
-        server['player_history'] = deque(maxlen=10)
-        server['mod_list'] = []
-        server['chat_username'] = f"Player{random.randint(1000, 9999)}"
+        server.update({
+            'last_query': 0,
+            'query_history': deque(maxlen=10),
+            'player_history': deque(maxlen=10),
+            'mod_list': [],
+            'chat_username': f"Player{random.randint(1000, 9999)}"
+        })
         self.servers.append(server)
         self.save_servers()
         print(f"{Colors.GREEN}已添加: {server['name']}{Colors.RESET}")
@@ -796,7 +1081,6 @@ class ServerManager:
     def update_server(self, index, field, value):
         """更新服务器信息"""
         if 0 <= index < len(self.servers):
-            # 特殊处理端口更新
             if field == 'port':
                 try:
                     value = int(value)
@@ -820,16 +1104,22 @@ class ServerManager:
 
         self.sort_field = field
         self.sort_order = order
-
         reverse = (order == 'desc')
 
         try:
             self.servers.sort(key=lambda s: s.get(field, ''), reverse=reverse)
-            print(f"{Colors.GREEN}已按 {field} {'降序' if reverse else '升序'} 排序{Colors.RESET}")
+            order_text = '降序' if reverse else '升序'
+            print(f"{Colors.GREEN}已按 {field} {order_text} 排序{Colors.RESET}")
             return True
         except Exception as e:
             print(f"{Colors.RED}排序失败: {str(e)}{Colors.RESET}")
             return False
+
+    def get_filtered_servers(self):
+        """获取筛选后的服务器列表"""
+        if self.filter_type == 'all':
+            return self.servers
+        return [s for s in self.servers if s.get('type', SERVER_TYPE_JAVA) == self.filter_type]
 
     def get_page(self, page=None):
         """获取分页数据"""
@@ -838,22 +1128,601 @@ class ServerManager:
 
         start = self.current_page * self.page_size
         end = start + self.page_size
-
-        # 应用筛选
-        filtered_servers = self.servers
-        if self.filter_type != 'all':
-            filtered_servers = [s for s in self.servers if s.get('type', 'java') == self.filter_type]
-
+        filtered_servers = self.get_filtered_servers()
+        
         return filtered_servers[start:end]
 
     def max_page(self):
         """计算最大页码"""
-        # 应用筛选
-        filtered_servers = self.servers
-        if self.filter_type != 'all':
-            filtered_servers = [s for s in self.servers if s.get('type', 'java') == self.filter_type]
-
+        filtered_servers = self.get_filtered_servers()
         return max(0, (len(filtered_servers) - 1) // self.page_size)
+
+    def query_servers_concurrently(self, servers, timeout=3):
+        """并发查询多个服务器"""
+        global global_cancel_query
+        
+        threads = []
+        results = [None] * len(servers)
+        
+        def query_server(idx, server):
+            try:
+                server_type = server.get('type', SERVER_TYPE_JAVA)
+                port = server.get('port', 25565 if server_type == SERVER_TYPE_JAVA else 19132)
+                results[idx] = MinecraftPing.ping(server['ip'], port, timeout, server_type=server_type)
+                
+                # 更新服务器历史记录
+                server_index = self.servers.index(server)
+                self.servers[server_index]['last_query'] = time.time()
+                
+                if 'error' not in results[idx]:
+                    query_time = results[idx].get('query_time', 0)
+                    self.servers[server_index]['query_history'].append({
+                        'timestamp': time.time(),
+                        'query_time': query_time
+                    })
+                    
+                    if 'players' in results[idx]:
+                        players = results[idx]['players']
+                        self.servers[server_index]['player_history'].append({
+                            'timestamp': time.time(),
+                            'online': players.get('online', 0),
+                            'max': players.get('max', 0)
+                        })
+                        
+                    # 记录mod列表
+                    if (server_type == SERVER_TYPE_JAVA and 'error' not in results[idx] and
+                        'modinfo' in results[idx] and 'modList' in results[idx]['modinfo']):
+                        mod_list = results[idx]['modinfo']['modList']
+                        self.servers[server_index]['mod_list'] = mod_list
+                        
+            except Exception as e:
+                server_type = server.get('type', SERVER_TYPE_JAVA)
+                results[idx] = MinecraftPing._create_error_result(str(e), server_type)
+        
+        # 启动线程
+        for i, server in enumerate(servers):
+            t = threading.Thread(target=query_server, args=(i, server))
+            t.daemon = True
+            t.start()
+            threads.append(t)
+        
+        # 显示加载动画（允许被SRV信息打断）
+        self._show_loading_animation(threads, "查询服务器状态中...")
+        
+        # 确保所有线程完成
+        for t in threads:
+            t.join(timeout=1)
+        
+        return results
+
+    def _show_loading_animation(self, threads, message="处理中..."):
+        """显示加载动画（允许被其他输出打断）"""
+        global global_cancel_query
+        
+        print(f"{Colors.CYAN}{message} (按 ^C 取消){Colors.RESET}", end='', flush=True)
+        animation = "|/-\\"
+        idx = 0
+        start_time = time.time()
+        
+        try:
+            while any(t.is_alive() for t in threads) and (time.time() - start_time < 15):
+                time.sleep(0.1)
+                if global_cancel_query:
+                    break
+                # 使用回车符覆盖上一行
+                print(f"\r{Colors.CYAN}{message} (按 ^C 取消) {animation[idx % len(animation)]}{Colors.RESET}", end='', flush=True)
+                idx += 1
+        except KeyboardInterrupt:
+            global_cancel_query = True
+            print(f"\n{Colors.YELLOW}查询已取消，显示部分结果...{Colors.RESET}")
+        finally:
+            global_cancel_query = False
+            print("\r" + " " * 50 + "\r", end='', flush=True)  # 清除动画
+
+    def display_servers(self, servers):
+        """显示服务器信息，带并发查询和颜色输出（保持原版格式）"""
+        if not servers:
+            print("\n" + "=" * 60)
+            print(f"{Colors.YELLOW}没有可显示的服务器{Colors.RESET}")
+            print("=" * 60)
+            return
+
+        print("\n" + "=" * 60)
+
+        # 显示筛选信息
+        filter_display = {
+            'all': '全部服务器',
+            'java': 'Java版服务器',
+            'bedrock': '基岩版服务器'
+        }
+        print(f"{Colors.CYAN}筛选: {filter_display.get(self.filter_type, '全部服务器')}{Colors.RESET}")
+
+        # 并发查询服务器
+        results = self.query_servers_concurrently(servers)
+
+        # 显示服务器信息
+        for i, server in enumerate(servers):
+            result = results[i] if results[i] is not None else MinecraftPing._create_error_result(
+                "查询未完成", server.get('type', SERVER_TYPE_JAVA)
+            )
+            
+            # 序号颜色
+            index_color = Colors.CYAN
+            if 'error' in result and ("离线" in result['error'] or "timed out" in result['error']):
+                index_color = Colors.RED
+            elif 'players' in result and result['players'].get('online', 0) > 0:
+                index_color = Colors.GREEN
+
+            # 服务器类型标识
+            server_type = result.get('server_type', server.get('type', SERVER_TYPE_JAVA))
+            type_display = f" [{Colors.MAGENTA}基岩版{Colors.RESET}]" if server_type == SERVER_TYPE_BEDROCK else f" [{Colors.BLUE}Java版{Colors.RESET}]"
+
+            print(f"\n{index_color}[{self.current_page * self.page_size + i + 1}]{Colors.RESET} {Colors.BOLD}{server['name']}{type_display}{Colors.RESET}")
+            print(f"{Colors.BLUE}地址:{Colors.RESET} {server['ip']}:{server.get('port', 25565 if server_type == SERVER_TYPE_JAVA else 19132)}")
+            
+            # 显示SRV解析信息
+            if 'srv_info' in result:
+                srv_info = result['srv_info']
+                print(f"{Colors.CYAN}SRV解析:{Colors.RESET} {srv_info['original_host']}:{srv_info['original_port']} → {srv_info['resolved_host']}:{srv_info['resolved_port']}")
+
+            if 'note' in server and server['note']:
+                print(f"{Colors.YELLOW}备注:{Colors.RESET} {server['note']}")
+
+            # 显示最后查询时间
+            if server.get('last_query', 0) > 0:
+                last_query_time = datetime.fromtimestamp(server['last_query']).strftime('%Y-%m-%d %H:%M:%S')
+                print(f"{Colors.YELLOW}上次查询:{Colors.RESET} {last_query_time}")
+
+            # 显示公告栏
+            if 'motd' in result and result['motd']:
+                # 计算终端宽度
+                try:
+                    terminal_width = os.get_terminal_size().columns
+                except:
+                    terminal_width = 80
+
+                # 分隔线
+                print(f"{Colors.CYAN}┌{'─' * (terminal_width - 2)}┐{Colors.RESET}")
+
+                # 显示公告栏内容
+                motd = result['motd']
+                print(f"{Colors.CYAN}│{Colors.RESET} {motd}")
+
+                # 分隔线
+                print(f"{Colors.CYAN}└{'─' * (terminal_width - 2)}┘{Colors.RESET}")
+
+            if 'error' in result:
+                # 离线状态
+                if "timed out" in result['error'] or "离线" in result['error']:
+                    error_color = Colors.RED
+                else:
+                    error_color = Colors.YELLOW
+
+                print(f"{error_color}状态: {result['error']}{Colors.RESET}")
+                if result['connect_time'] > 0:
+                    print(f"{Colors.BLUE}连接时间:{Colors.RESET} {result['connect_time']}ms")
+            else:
+                # 服务器版本
+                version = result.get('version', {}).get('name', '未知')
+                if server_type == SERVER_TYPE_BEDROCK:
+                    version_color = Colors.MAGENTA
+                    version_display = f"{version}"
+                else:
+                    if '1.21' in version or '1.20' in version:
+                        version_color = Colors.GREEN
+                    elif '1.19' in version or '1.20' in version:
+                        version_color = Colors.YELLOW
+                    else:
+                        version_color = Colors.RED
+                    version_display = f"{version}"
+
+                print(f"{Colors.BLUE}版本:{Colors.RESET} {version_color}{version_display}{Colors.RESET}")
+
+                # 玩家数量
+                players = result.get('players', {})
+                online = players.get('online', 0)
+                max_players = players.get('max', 0)
+
+                # 根据在线人数选择颜色
+                if online == 0:
+                    player_color = Colors.RED
+                elif online < max_players * 0.5:
+                    player_color = Colors.YELLOW
+                else:
+                    player_color = Colors.GREEN
+
+                print(f"{Colors.BLUE}玩家:{Colors.RESET} {player_color}{online}{Colors.RESET}/{max_players}")
+
+                # 显示玩家列表（如果可用）
+                if server_type != SERVER_TYPE_BEDROCK and 'players' in result and 'sample' in result['players']:
+                    sample_players = result['players']['sample']
+                    if sample_players and len(sample_players) > 0:
+                        print(f"{Colors.BLUE}在线玩家:{Colors.RESET}")
+                        for player in sample_players[:5]:  # 最多显示5个
+                            player_name = player.get('name', '未知')
+                            # 安全地转换玩家名字中的颜色代码
+                            safe_name = MinecraftPing.safe_convert_mc_formatting(player_name, Colors.RESET)
+                            print(f"  {Colors.GREEN}•{Colors.RESET} {safe_name}")
+
+                        # 如果还有更多玩家，显示提示
+                        if len(sample_players) > 5:
+                            print(f"  {Colors.CYAN}... 还有 {len(sample_players) - 5} 个玩家{Colors.RESET}")
+
+                # 延迟信息
+                if result.get('query_time', 0) > 0:
+                    delay_color = Colors.GREEN
+                    if result['query_time'] > 500:
+                        delay_color = Colors.YELLOW
+                    if result['query_time'] > 1000:
+                        delay_color = Colors.RED
+
+                    delay_info = f"{Colors.BLUE}延迟:{Colors.RESET} {delay_color}{result['query_time']}ms{Colors.RESET}"
+                    if result.get('connect_time', 0) > 0:
+                        delay_info += f" ({Colors.BLUE}连接:{Colors.RESET} {result['connect_time']}ms)"
+                    print(delay_info)
+
+                # 基岩版特定信息
+                if server_type == SERVER_TYPE_BEDROCK:
+                    if 'game_mode' in result and result['game_mode']:
+                        print(f"{Colors.BLUE}游戏模式:{Colors.RESET} {result['game_mode']}")
+                    if 'edition' in result and result['edition']:
+                        print(f"{Colors.BLUE}版本:{Colors.RESET} {result['edition']}")
+
+        print("=" * 60)
+
+        # 计算筛选后的服务器总数
+        filtered_servers = self.get_filtered_servers()
+
+        print(f"{Colors.CYAN}页码:{Colors.RESET} {self.current_page + 1}/{self.max_page() + 1} | {Colors.CYAN}总数:{Colors.RESET} {len(filtered_servers)}/{len(self.servers)}")
+        print(f"{Colors.CYAN}排序:{Colors.RESET} {self.sort_field} ({self.sort_order}) | {Colors.CYAN}每页:{Colors.RESET} {self.page_size}")
+
+    def show_players(self, index):
+        """显示指定服务器的完整玩家列表"""
+        if index < 0 or index >= len(self.servers):
+            print(f"{Colors.RED}无效的服务器序号{Colors.RESET}")
+            return
+
+        server = self.servers[index]
+        server_type = server.get('type', SERVER_TYPE_JAVA)
+        port = server.get('port', 25565 if server_type == SERVER_TYPE_JAVA else 19132)
+
+        if server_type == SERVER_TYPE_BEDROCK:
+            print(f"{Colors.YELLOW}基岩版服务器不支持玩家列表查询{Colors.RESET}")
+            return
+
+        print(f"{Colors.CYAN}查询 {server['name']} 的玩家列表...{Colors.RESET}")
+
+        # 使用server_info模块查询玩家列表（如果可用）
+        if SERVER_INFO_AVAILABLE:
+            try:
+                players = ServerInfoInterface.get_player_list(server['ip'], port, server_type, timeout=5)
+                if players:
+                    print(f"\n{Colors.BOLD}{server['name']} 玩家列表:{Colors.RESET}")
+                    print(f"{Colors.BLUE}在线玩家:{Colors.RESET} {len(players)}")
+                    print("-" * 40)
+
+                    # 显示所有玩家
+                    for i, player in enumerate(players):
+                        player_name = player.get('name', '未知') if isinstance(player, dict) else str(player)
+                        # 安全地转换玩家名字中的颜色代码
+                        safe_name = MinecraftPing.safe_convert_mc_formatting(player_name, Colors.RESET)
+
+                        # 每10个玩家分组显示
+                        if i % 10 == 0 and i > 0:
+                            input(f"{Colors.CYAN}按回车键继续显示...{Colors.RESET}")
+                            print("-" * 40)
+
+                        print(f"  {Colors.GREEN}{i+1:2d}.{Colors.RESET} {safe_name}")
+
+                    print("-" * 40)
+                    return
+            except Exception as e:
+                print(f"{Colors.YELLOW}使用server_info查询失败: {str(e)}{Colors.RESET}")
+                print(f"{Colors.CYAN}回退到基本查询...{Colors.RESET}")
+
+        # 回退到基本查询
+        result = MinecraftPing.ping(server['ip'], port, timeout=5, use_cache=False, server_type=server_type)
+
+        if 'error' in result:
+            print(f"{Colors.RED}查询失败: {result['error']}{Colors.RESET}")
+            return
+
+        if 'players' not in result or 'sample' not in result['players']:
+            print(f"{Colors.YELLOW}服务器未返回玩家列表信息{Colors.RESET}")
+            return
+
+        players = result['players']
+        sample_players = players.get('sample', [])
+        online = players.get('online', 0)
+        max_players = players.get('max', 0)
+
+        print(f"\n{Colors.BOLD}{server['name']} 玩家列表:{Colors.RESET}")
+        print(f"{Colors.BLUE}在线玩家:{Colors.RESET} {online}/{max_players}")
+        print("-" * 40)
+
+        if not sample_players:
+            print(f"{Colors.YELLOW}没有玩家在线{Colors.RESET}")
+            return
+
+        # 显示所有玩家
+        for i, player in enumerate(sample_players):
+            player_name = player.get('name', '未知')
+            player_id = player.get('id', '')
+            # 安全地转换玩家名字中的颜色代码
+            safe_name = MinecraftPing.safe_convert_mc_formatting(player_name, Colors.RESET)
+
+            # 每10个玩家分组显示
+            if i % 10 == 0 and i > 0:
+                input(f"{Colors.CYAN}按回车键继续显示...{Colors.RESET}")
+                print("-" * 40)
+
+            print(f"  {Colors.GREEN}{i+1:2d}.{Colors.RESET} {safe_name}")
+
+        print("-" * 40)
+
+    def show_server_info(self, index, show_all_mods=False):
+        """显示指定服务器的详细信息，包括历史统计和mod列表"""
+        if index < 0 or index >= len(self.servers):
+            print(f"{Colors.RED}无效的服务器序号{Colors.RESET}")
+            return
+
+        server = self.servers[index]
+        server_type = server.get('type', SERVER_TYPE_JAVA)
+        port = server.get('port', 25565 if server_type == SERVER_TYPE_JAVA else 19132)
+
+        print(f"\n{Colors.BOLD}{Colors.CYAN}服务器详细信息: {server['name']}{Colors.RESET}")
+        print(f"{Colors.CYAN}地址: {server['ip']}:{port}{Colors.RESET}")
+        print(f"{Colors.CYAN}类型: {'Java版' if server_type == SERVER_TYPE_JAVA else '基岩版'}{Colors.RESET}")
+        print("-" * 60)
+
+        # 使用server_info模块查询详细信息（如果可用）
+        if SERVER_INFO_AVAILABLE:
+            try:
+                print(f"{Colors.YELLOW}正在使用server_info模块查询服务器信息...{Colors.RESET}")
+                result = ServerInfoInterface.get_detailed_info(server['ip'], port, server_type, timeout=10)
+
+                if 'error' in result:
+                    print(f"{Colors.RED}服务器离线: {result['error']}{Colors.RESET}")
+                else:
+                    # 显示基本信息
+                    print(f"{Colors.BOLD}基本信息:{Colors.RESET}")
+                    print(f"  {Colors.BLUE}版本:{Colors.RESET} {result.get('version', {}).get('name', '未知')}")
+
+                    players = result.get('players', {})
+                    online = players.get('online', 0)
+                    max_players = players.get('max', 0)
+                    print(f"  {Colors.BLUE}玩家:{Colors.RESET} {online}/{max_players}")
+
+                    if result.get('query_time', 0) > 0:
+                        print(f"  {Colors.BLUE}延迟:{Colors.RESET} {result['query_time']}ms")
+
+                    # 显示公告栏
+                    if 'motd' in result and result['motd']:
+                        print(f"  {Colors.BLUE}公告栏:{Colors.RESET}")
+                        print(f"    {result['motd']}")
+
+                    # 获取mod列表（如果可用）
+                    if server_type == SERVER_TYPE_JAVA:
+                        mod_list = ServerInfoInterface.get_mod_list(server['ip'], port, server_type, timeout=3)
+                        if mod_list:
+                            server['mod_list'] = mod_list
+            except Exception as e:
+                print(f"{Colors.YELLOW}使用server_info查询失败: {str(e)}{Colors.RESET}")
+                print(f"{Colors.CYAN}回退到基本查询...{Colors.RESET}")
+
+        # 回退到基本查询
+        print(f"{Colors.YELLOW}正在查询服务器状态...{Colors.RESET}")
+        result = MinecraftPing.ping(server['ip'], port, timeout=5, use_cache=False, server_type=server_type)
+
+        if 'error' in result:
+            print(f"{Colors.RED}服务器离线: {result['error']}{Colors.RESET}")
+        else:
+            # 显示基本信息
+            print(f"{Colors.BOLD}基本信息:{Colors.RESET}")
+            print(f"  {Colors.BLUE}版本:{Colors.RESET} {result.get('version', {}).get('name', '未知')}")
+
+            players = result.get('players', {})
+            online = players.get('online', 0)
+            max_players = players.get('max', 0)
+            print(f"  {Colors.BLUE}玩家:{Colors.RESET} {online}/{max_players}")
+
+            if result.get('query_time', 0) > 0:
+                print(f"  {Colors.BLUE}延迟:{Colors.RESET} {result['query_time']}ms")
+
+            # 显示公告栏
+            if 'motd' in result and result['motd']:
+                print(f"  {Colors.BLUE}公告栏:{Colors.RESET}")
+                print(f"    {result['motd']}")
+
+        # 显示延迟统计
+        print(f"\n{Colors.BOLD}延迟统计 (最近10次查询):{Colors.RESET}")
+        if server['query_history']:
+            query_times = [item['query_time'] for item in server['query_history']]
+            avg_delay = sum(query_times) / len(query_times)
+            min_delay = min(query_times)
+            max_delay = max(query_times)
+
+            print(f"  {Colors.BLUE}平均延迟:{Colors.RESET} {avg_delay:.1f}ms")
+            print(f"  {Colors.BLUE}最低延迟:{Colors.RESET} {min_delay}ms")
+            print(f"  {Colors.BLUE}最高延迟:{Colors.RESET} {max_delay}ms")
+            print(f"  {Colors.BLUE}查询次数:{Colors.RESET} {len(query_times)}")
+
+            # 显示延迟趋势
+            if len(query_times) > 1:
+                trend = "稳定"
+                if query_times[-1] > avg_delay * 1.5:
+                    trend = f"{Colors.RED}上升{Colors.RESET}"
+                elif query_times[-1] < avg_delay * 0.5:
+                    trend = f"{Colors.GREEN}下降{Colors.RESET}"
+                print(f"  {Colors.BLUE}趋势:{Colors.RESET} {trend}")
+        else:
+            print(f"  {Colors.YELLOW}暂无历史数据{Colors.RESET}")
+
+        # 显示玩家统计
+        print(f"\n{Colors.BOLD}玩家统计 (最近10次查询):{Colors.RESET}")
+        if server['player_history']:
+            player_counts = [item['online'] for item in server['player_history']]
+            avg_players = sum(player_counts) / len(player_counts)
+            min_players = min(player_counts)
+            max_players = max(player_counts)
+
+            print(f"  {Colors.BLUE}平均在线:{Colors.RESET} {avg_players:.1f}")
+            print(f"  {Colors.BLUE}最低在线:{Colors.RESET} {min_players}")
+            print(f"  {Colors.BLUE}最高在线:{Colors.RESET} {max_players}")
+
+            # 显示最近一次查询的玩家列表
+            if 'error' not in result and 'players' in result and 'sample' in result['players']:
+                sample_players = result['players']['sample']
+                if sample_players and len(sample_players) > 0:
+                    print(f"  {Colors.BLUE}当前在线玩家:{Colors.RESET}")
+                    for i, player in enumerate(sample_players[:5]):  # 最多显示5个
+                        player_name = player.get('name', '未知')
+                        # 安全地转换玩家名字中的颜色代码
+                        safe_name = MinecraftPing.safe_convert_mc_formatting(player_name, Colors.RESET)
+                        print(f"    {Colors.GREEN}•{Colors.RESET} {safe_name}")
+
+                    if len(sample_players) > 5:
+                        print(f"    {Colors.CYAN}... 还有 {len(sample_players) - 5} 个玩家{Colors.RESET}")
+        else:
+            print(f"  {Colors.YELLOW}暂无历史数据{Colors.RESET}")
+
+        # 显示mod列表（仅Java版）
+        if server_type == SERVER_TYPE_JAVA and server.get('mod_list'):
+            print(f"\n{Colors.BOLD}Mod列表 ({len(server['mod_list'])} 个):{Colors.RESET}")
+
+            if not show_all_mods and len(server['mod_list']) > 10:
+                # 显示前5个和后5个mod
+                for i, mod in enumerate(server['mod_list'][:5]):
+                    print(f"  {Colors.GREEN}•{Colors.RESET} {mod.get('modid', '未知')} - {mod.get('version', '未知')}")
+
+                print(f"  {Colors.CYAN}... 省略 {len(server['mod_list']) - 10} 个mod ...{Colors.RESET}")
+
+                for i, mod in enumerate(server['mod_list'][-5:]):
+                    idx = len(server['mod_list']) - 5 + i
+                    print(f"  {Colors.GREEN}•{Colors.RESET} {mod.get('modid', '未知')} - {mod.get('version', '未知')}")
+
+                print(f"\n{Colors.CYAN}使用 'info {index+1} -allmod' 查看完整mod列表{Colors.RESET}")
+            else:
+                # 显示所有mod
+                for i, mod in enumerate(server['mod_list']):
+                    print(f"  {Colors.GREEN}•{Colors.RESET} {mod.get('modid', '未知')} - {mod.get('version', '未知')}")
+
+        print("-" * 60)
+
+        # 等待用户按回车返回
+        input(f"{Colors.CYAN}按回车键返回主菜单...{Colors.RESET}")
+
+    def monitor_server(self, index):
+        """监控指定服务器的状态变化"""
+        if index < 0 or index >= len(self.servers):
+            print(f"{Colors.RED}无效的服务器序号{Colors.RESET}")
+            return False
+        
+        # 创建监控器
+        monitor = ServerMonitor(self, index)
+        
+        # 开始监控
+        monitor.start()
+        
+        print(f"\n{Colors.GREEN}已退出监控模式{Colors.RESET}")
+        input(f"{Colors.CYAN}按回车键返回主菜单...{Colors.RESET}")
+        return True
+
+    def chat_server(self, index):
+      """连接到指定服务器的聊天"""
+      if index < 0 or index >= len(self.servers):
+        print(f"{Colors.RED}无效的服务器序号{Colors.RESET}")
+        return False
+
+      if not SERVER_INFO_AVAILABLE:
+        print(f"{Colors.RED}聊天功能需要server_info模块，但未找到{Colors.RESET}")
+        return False
+
+      server = self.servers[index]
+      server_type = server.get('type', SERVER_TYPE_JAVA)
+      port = server.get('port', 25565 if server_type == SERVER_TYPE_JAVA else 19132)
+
+      if server_type != SERVER_TYPE_JAVA:
+        print(f"{Colors.RED}只有Java版服务器支持聊天功能{Colors.RESET}")
+        return False
+
+      print(f"{Colors.CYAN}正在连接到 {server['name']} 的聊天...{Colors.RESET}")
+
+      # 获取聊天用户名
+      username = server.get('chat_username', f"Player{random.randint(1000, 9999)}")
+      print(f"{Colors.CYAN}使用用户名: {username}{Colors.RESET}")
+
+      # 先尝试获取服务器版本信息
+      print(f"{Colors.CYAN}正在检测服务器版本...{Colors.RESET}")
+      try:
+        result = MinecraftPing.ping(server['ip'], port, timeout=5, server_type="java")
+        if 'error' in result:
+          print(f"{Colors.YELLOW}无法检测服务器版本，使用默认版本{Colors.RESET}")
+          server_version = None
+        else:
+          server_version = result.get('version', {}).get('name', None)
+          if server_version:
+            print(f"{Colors.GREEN}检测到服务器版本: {server_version}{Colors.RESET}")
+          else:
+            print(f"{Colors.YELLOW}无法获取服务器版本，使用默认版本{Colors.RESET}")
+            server_version = None
+      except Exception as e:
+        print(f"{Colors.YELLOW}版本检测失败: {str(e)}{Colors.RESET}")
+        server_version = None
+
+      # 创建聊天客户端
+      global global_chat_client
+      try:
+        # 获取服务器的mod列表
+        forge_mods = server.get('mod_list', [])
+
+        # 添加调试信息
+        print(f"{Colors.CYAN}创建聊天客户端实例...{Colors.RESET}")
+        chat_client = MinecraftChatClient(server['ip'], port, username, server_version)
+        chat_client.set_server_name(server['name'])
+
+        # 设置Forge mod列表
+        if forge_mods:
+          chat_client.set_forge_mods(forge_mods)
+          print(f"{Colors.GREEN}检测到Forge服务器，已加载 {len(forge_mods)} 个Mod{Colors.RESET}")
+
+        # 设置消息回调
+        def chat_callback(sender, message):
+          timestamp = datetime.now().strftime("%H:%M:%S")
+          print(f"{Colors.CYAN}[{timestamp}] {Colors.GREEN}{sender}:{Colors.RESET} {message}")
+
+        chat_client.set_chat_callback(chat_callback)
+
+        # 连接到服务器
+        if chat_client.start_listening():
+          global_chat_client = chat_client
+          print(f"{Colors.GREEN}已连接到聊天，输入消息发送，输入 '/quit' 退出聊天{Colors.RESET}")
+
+          # 聊天循环
+          while True:
+            try:
+              message = input().strip()
+              if message.lower() == '/quit':
+                break
+              if message:
+                chat_client.send_chat_message(message)
+            except KeyboardInterrupt:
+              print(f"\n{Colors.YELLOW}退出聊天{Colors.RESET}")
+              break
+
+          # 断开连接
+          chat_client.stop()
+          global_chat_client = None
+          print(f"{Colors.GREEN}已断开聊天连接{Colors.RESET}")
+        else:
+          print(f"{Colors.RED}连接聊天失败{Colors.RESET}")
+          return False
+
+      except Exception as e:
+        print(f"{Colors.RED}聊天连接错误: {str(e)}{Colors.RESET}")
+        return False
+
+      return True
 
     def scan_ports(self, host, timeout=1):
         """扫描常用Minecraft端口"""
@@ -1121,7 +1990,7 @@ class ServerManager:
                 else:
                     if '1.21' in version or '1.20' in version:
                         version_color = Colors.GREEN
-                    elif '1.19' in version or '1.18' in version:
+                    elif '1.19' in version or '1.20' in version:
                         version_color = Colors.YELLOW
                     else:
                         version_color = Colors.RED
@@ -1191,560 +2060,6 @@ class ServerManager:
             print(f"{Colors.RED}无效的选择{Colors.RESET}")
             return None
 
-    def display_servers(self, servers):
-        """显示服务器信息，带并发查询和颜色输出"""
-        global global_cancel_query
-
-        if not servers:
-            print("\n" + "=" * 60)
-            print(f"{Colors.YELLOW}没有可显示的服务器{Colors.RESET}")
-            print("=" * 60)
-            return
-
-        print("\n" + "=" * 60)
-
-        # 显示筛选信息
-        filter_display = {
-            'all': '全部服务器',
-            'java': 'Java版服务器',
-            'bedrock': '基岩版服务器'
-        }
-        print(f"{Colors.CYAN}筛选: {filter_display.get(self.filter_type, '全部服务器')}{Colors.RESET}")
-
-        # 创建线程列表
-        threads = []
-        results = [None] * len(servers)
-
-        # 查询函数
-        def query_server(idx, server):
-            try:
-                server_type = server.get('type', 'java')
-                port = server.get('port', 25565 if server_type == 'java' else 19132)
-                results[idx] = MinecraftPing.ping(server['ip'], port, timeout=3, server_type=server_type)
-
-                # 更新最后查询时间和历史记录
-                server_index = self.servers.index(server)
-                self.servers[server_index]['last_query'] = time.time()
-
-                # 记录查询历史（延迟）
-                if 'error' not in results[idx]:
-                    query_time = results[idx].get('query_time', 0)
-                    self.servers[server_index]['query_history'].append({
-                        'timestamp': time.time(),
-                        'query_time': query_time
-                    })
-
-                # 记录玩家历史
-                if 'error' not in results[idx] and 'players' in results[idx]:
-                    players = results[idx]['players']
-                    online = players.get('online', 0)
-                    max_players = players.get('max', 0)
-
-                    self.servers[server_index]['player_history'].append({
-                        'timestamp': time.time(),
-                        'online': online,
-                        'max': max_players
-                    })
-
-                # 检查并记录mod列表（仅Java版）
-                if (server_type == 'java' and 'error' not in results[idx] and
-                    'modinfo' in results[idx] and 'modList' in results[idx]['modinfo']):
-                    mod_list = results[idx]['modinfo']['modList']
-                    self.servers[server_index]['mod_list'] = mod_list
-
-            except Exception as e:
-                results[idx] = {"error": str(e), "connect_time": 0, "query_time": 0, "motd": "", "server_type": server.get('type', 'java')}
-
-        # 启动查询线程
-        for i, server in enumerate(servers):
-            t = threading.Thread(target=query_server, args=(i, server))
-            t.daemon = True
-            t.start()
-            threads.append(t)
-
-        # 显示加载动画
-        print(f"{Colors.CYAN}查询服务器状态中... (按 ^C 取消){Colors.RESET}", end='', flush=True)
-        animation = "|/-\\"
-        idx = 0
-
-        # 等待所有线程完成或超时
-        start_time = time.time()
-        try:
-            while any(t.is_alive() for t in threads) and (time.time() - start_time < 15):
-                time.sleep(0.1)
-                print(f"\r{Colors.CYAN}查询服务器状态中... (按 ^C 取消) {animation[idx % len(animation)]}{Colors.RESET}", end='', flush=True)
-                idx += 1
-        except KeyboardInterrupt:
-            global_cancel_query = True
-            print(f"\n{Colors.YELLOW}查询已取消，显示部分结果...{Colors.RESET}")
-            # 等待一小段时间让线程有机会退出
-            time.sleep(0.5)
-        finally:
-            # 重置取消标志
-            global_cancel_query = False
-            print("\r" + " " * 50 + "\r", end='', flush=True)  # 清除动画
-
-        # 显示结果
-        for i, server in enumerate(servers):
-            result = results[i]
-            if result is None:
-                result = {"error": "查询未完成", "connect_time": 0, "query_time": 0, "motd": "", "server_type": server.get('type', 'java')}
-
-            # 序号颜色
-            index_color = Colors.CYAN
-            if 'error' in result and "离线" in result['error']:
-                index_color = Colors.RED
-            elif 'players' in result and result['players'].get('online', 0) > 0:
-                index_color = Colors.GREEN
-
-            # 显示服务器类型标识
-            server_type = result.get('server_type', server.get('type', 'java'))
-            type_display = f" [{Colors.MAGENTA}基岩版{Colors.RESET}]" if server_type == 'bedrock' else f" [{Colors.BLUE}Java版{Colors.RESET}]"
-
-            print(f"\n{index_color}[{self.current_page * self.page_size + i + 1}]{Colors.RESET} {Colors.BOLD}{server['name']}{type_display}{Colors.RESET}")
-            print(f"{Colors.BLUE}地址:{Colors.RESET} {server['ip']}:{server.get('port', 25565 if server_type == 'java' else 19132)}")
-            
-            # 显示SRV解析信息
-            if 'srv_info' in result:
-                srv_info = result['srv_info']
-                print(f"{Colors.CYAN}SRV解析:{Colors.RESET} {srv_info['original_host']}:{srv_info['original_port']} → {srv_info['resolved_host']}:{srv_info['resolved_port']}")
-
-            if 'note' in server and server['note']:
-                print(f"{Colors.YELLOW}备注:{Colors.RESET} {server['note']}")
-
-            # 显示最后查询时间
-            if server.get('last_query', 0) > 0:
-                last_query_time = datetime.fromtimestamp(server['last_query']).strftime('%Y-%m-%d %H:%M:%S')
-                print(f"{Colors.YELLOW}上次查询:{Colors.RESET} {last_query_time}")
-
-            # 显示公告栏
-            if 'motd' in result and result['motd']:
-                # 计算终端宽度
-                try:
-                    terminal_width = os.get_terminal_size().columns
-                except:
-                    terminal_width = 80
-
-                # 分隔线
-                print(f"{Colors.CYAN}┌{'─' * (terminal_width - 2)}┐{Colors.RESET}")
-
-                # 显示公告栏内容
-                motd = result['motd']
-                print(f"{Colors.CYAN}│{Colors.RESET} {motd}")
-
-                # 分隔线
-                print(f"{Colors.CYAN}└{'─' * (terminal_width - 2)}┘{Colors.RESET}")
-
-            if 'error' in result:
-                # 离线状态
-                if "timed out" in result['error'] or "离线" in result['error']:
-                    error_color = Colors.RED
-                else:
-                    error_color = Colors.YELLOW
-
-                print(f"{error_color}状态: {result['error']}{Colors.RESET}")
-                if result['connect_time'] > 0:
-                    print(f"{Colors.BLUE}连接时间:{Colors.RESET} {result['connect_time']}ms")
-            else:
-                # 服务器版本
-                version = result.get('version', {}).get('name', '未知')
-                if server_type == 'bedrock':
-                    version_color = Colors.MAGENTA
-                    version_display = f"{version}"
-                else:
-                    if '1.21' in version or '1.20' in version:
-                        version_color = Colors.GREEN
-                    elif '1.19' in version or '1.18' in version:
-                        version_color = Colors.YELLOW
-                    else:
-                        version_color = Colors.RED
-                    version_display = f"{version}"
-
-                print(f"{Colors.BLUE}版本:{Colors.RESET} {version_color}{version_display}{Colors.RESET}")
-
-                # 玩家数量
-                players = result.get('players', {})
-                online = players.get('online', 0)
-                max_players = players.get('max', 0)
-
-                # 根据在线人数选择颜色
-                if online == 0:
-                    player_color = Colors.RED
-                elif online < max_players * 0.5:
-                    player_color = Colors.YELLOW
-                else:
-                    player_color = Colors.GREEN
-
-                print(f"{Colors.BLUE}玩家:{Colors.RESET} {player_color}{online}{Colors.RESET}/{max_players}")
-
-                # 显示玩家列表（如果可用）
-                if server_type != 'bedrock' and 'players' in result and 'sample' in result['players']:
-                    sample_players = result['players']['sample']
-                    if sample_players and len(sample_players) > 0:
-                        player_names = [player.get('name', '未知') for player in sample_players[:5]]  # 最多显示5个
-                        print(f"{Colors.BLUE}在线玩家:{Colors.RESET}")
-                        for name in player_names:
-                            print(f"  {Colors.GREEN}•{Colors.RESET} {name}")
-
-                        # 如果还有更多玩家，显示提示
-                        if len(sample_players) > 5:
-                            print(f"  {Colors.CYAN}... 还有 {len(sample_players) - 5} 个玩家{Colors.RESET}")
-
-                # 延迟信息
-                if result.get('query_time', 0) > 0:
-                    delay_color = Colors.GREEN
-                    if result['query_time'] > 500:
-                        delay_color = Colors.YELLOW
-                    if result['query_time'] > 1000:
-                        delay_color = Colors.RED
-
-                    delay_info = f"{Colors.BLUE}延迟:{Colors.RESET} {delay_color}{result['query_time']}ms{Colors.RESET}"
-                    if result.get('connect_time', 0) > 0:
-                        delay_info += f" ({Colors.BLUE}连接:{Colors.RESET} {result['connect_time']}ms)"
-                    print(delay_info)
-
-                # 基岩版特定信息
-                if server_type == 'bedrock':
-                    if 'game_mode' in result and result['game_mode']:
-                        print(f"{Colors.BLUE}游戏模式:{Colors.RESET} {result['game_mode']}")
-                    if 'edition' in result and result['edition']:
-                        print(f"{Colors.BLUE}版本:{Colors.RESET} {result['edition']}")
-
-        print("=" * 60)
-
-        # 计算筛选后的服务器总数
-        filtered_servers = self.servers
-        if self.filter_type != 'all':
-            filtered_servers = [s for s in self.servers if s.get('type', 'java') == self.filter_type]
-
-        print(f"{Colors.CYAN}页码:{Colors.RESET} {self.current_page + 1}/{self.max_page() + 1} | {Colors.CYAN}总数:{Colors.RESET} {len(filtered_servers)}/{len(self.servers)}")
-        print(f"{Colors.CYAN}排序:{Colors.RESET} {self.sort_field} ({self.sort_order}) | {Colors.CYAN}每页:{Colors.RESET} {self.page_size}")
-
-    def show_players(self, index):
-        """显示指定服务器的完整玩家列表"""
-        if index < 0 or index >= len(self.servers):
-            print(f"{Colors.RED}无效的服务器序号{Colors.RESET}")
-            return
-
-        server = self.servers[index]
-        server_type = server.get('type', 'java')
-        port = server.get('port', 25565 if server_type == 'java' else 19132)
-
-        if server_type == 'bedrock':
-            print(f"{Colors.YELLOW}基岩版服务器不支持玩家列表查询{Colors.RESET}")
-            return
-
-        print(f"{Colors.CYAN}查询 {server['name']} 的玩家列表...{Colors.RESET}")
-
-        # 使用server_info模块查询玩家列表（如果可用）
-        if SERVER_INFO_AVAILABLE:
-            try:
-                players = ServerInfoInterface.get_player_list(server['ip'], port, server_type, timeout=5)
-                if players:
-                    print(f"\n{Colors.BOLD}{server['name']} 玩家列表:{Colors.RESET}")
-                    print(f"{Colors.BLUE}在线玩家:{Colors.RESET} {len(players)}")
-                    print("-" * 40)
-
-                    # 显示所有玩家
-                    for i, player in enumerate(players):
-                        player_name = player.get('name', '未知') if isinstance(player, dict) else str(player)
-
-                        # 每10个玩家分组显示
-                        if i % 10 == 0 and i > 0:
-                            input(f"{Colors.CYAN}按回车键继续显示...{Colors.RESET}")
-                            print("-" * 40)
-
-                        print(f"  {Colors.GREEN}{i+1:2d}.{Colors.RESET} {player_name}")
-
-                    print("-" * 40)
-                    return
-            except Exception as e:
-                print(f"{Colors.YELLOW}使用server_info查询失败: {str(e)}{Colors.RESET}")
-                print(f"{Colors.CYAN}回退到基本查询...{Colors.RESET}")
-
-        # 回退到基本查询
-        result = MinecraftPing.ping(server['ip'], port, timeout=5, use_cache=False, server_type=server_type)
-
-        if 'error' in result:
-            print(f"{Colors.RED}查询失败: {result['error']}{Colors.RESET}")
-            return
-
-        if 'players' not in result or 'sample' not in result['players']:
-            print(f"{Colors.YELLOW}服务器未返回玩家列表信息{Colors.RESET}")
-            return
-
-        players = result['players']
-        sample_players = players.get('sample', [])
-        online = players.get('online', 0)
-        max_players = players.get('max', 0)
-
-        print(f"\n{Colors.BOLD}{server['name']} 玩家列表:{Colors.RESET}")
-        print(f"{Colors.BLUE}在线玩家:{Colors.RESET} {online}/{max_players}")
-        print("-" * 40)
-
-        if not sample_players:
-            print(f"{Colors.YELLOW}没有玩家在线{Colors.RESET}")
-            return
-
-        # 显示所有玩家
-        for i, player in enumerate(sample_players):
-            player_name = player.get('name', '未知')
-            player_id = player.get('id', '')
-
-            # 每10个玩家分组显示
-            if i % 10 == 0 and i > 0:
-                input(f"{Colors.CYAN}按回车键继续显示...{Colors.RESET}")
-                print("-" * 40)
-
-            print(f"  {Colors.GREEN}{i+1:2d}.{Colors.RESET} {player_name}")
-
-        print("-" * 40)
-
-    def show_server_info(self, index, show_all_mods=False):
-        """显示指定服务器的详细信息，包括历史统计和mod列表"""
-        if index < 0 or index >= len(self.servers):
-            print(f"{Colors.RED}无效的服务器序号{Colors.RESET}")
-            return
-
-        server = self.servers[index]
-        server_type = server.get('type', 'java')
-        port = server.get('port', 25565 if server_type == 'java' else 19132)
-
-        print(f"\n{Colors.BOLD}{Colors.CYAN}服务器详细信息: {server['name']}{Colors.RESET}")
-        print(f"{Colors.CYAN}地址: {server['ip']}:{port}{Colors.RESET}")
-        print(f"{Colors.CYAN}类型: {'Java版' if server_type == 'java' else '基岩版'}{Colors.RESET}")
-        print("-" * 60)
-
-        # 使用server_info模块查询详细信息（如果可用）
-        if SERVER_INFO_AVAILABLE:
-            try:
-                print(f"{Colors.YELLOW}正在使用server_info模块查询服务器信息...{Colors.RESET}")
-                result = ServerInfoInterface.get_detailed_info(server['ip'], port, server_type, timeout=10)
-
-                if 'error' in result:
-                    print(f"{Colors.RED}服务器离线: {result['error']}{Colors.RESET}")
-                else:
-                    # 显示基本信息
-                    print(f"{Colors.BOLD}基本信息:{Colors.RESET}")
-                    print(f"  {Colors.BLUE}版本:{Colors.RESET} {result.get('version', {}).get('name', '未知')}")
-
-                    players = result.get('players', {})
-                    online = players.get('online', 0)
-                    max_players = players.get('max', 0)
-                    print(f"  {Colors.BLUE}玩家:{Colors.RESET} {online}/{max_players}")
-
-                    if result.get('query_time', 0) > 0:
-                        print(f"  {Colors.BLUE}延迟:{Colors.RESET} {result['query_time']}ms")
-
-                    # 显示公告栏
-                    if 'motd' in result and result['motd']:
-                        print(f"  {Colors.BLUE}公告栏:{Colors.RESET}")
-                        print(f"    {result['motd']}")
-
-                    # 获取mod列表（如果可用）
-                    if server_type == 'java':
-                        mod_list = ServerInfoInterface.get_mod_list(server['ip'], port, server_type, timeout=3)
-                        if mod_list:
-                            server['mod_list'] = mod_list
-            except Exception as e:
-                print(f"{Colors.YELLOW}使用server_info查询失败: {str(e)}{Colors.RESET}")
-                print(f"{Colors.CYAN}回退到基本查询...{Colors.RESET}")
-
-        # 回退到基本查询
-        print(f"{Colors.YELLOW}正在查询服务器状态...{Colors.RESET}")
-        result = MinecraftPing.ping(server['ip'], port, timeout=5, use_cache=False, server_type=server_type)
-
-        if 'error' in result:
-            print(f"{Colors.RED}服务器离线: {result['error']}{Colors.RESET}")
-        else:
-            # 显示基本信息
-            print(f"{Colors.BOLD}基本信息:{Colors.RESET}")
-            print(f"  {Colors.BLUE}版本:{Colors.RESET} {result.get('version', {}).get('name', '未知')}")
-
-            players = result.get('players', {})
-            online = players.get('online', 0)
-            max_players = players.get('max', 0)
-            print(f"  {Colors.BLUE}玩家:{Colors.RESET} {online}/{max_players}")
-
-            if result.get('query_time', 0) > 0:
-                print(f"  {Colors.BLUE}延迟:{Colors.RESET} {result['query_time']}ms")
-
-            # 显示公告栏
-            if 'motd' in result and result['motd']:
-                print(f"  {Colors.BLUE}公告栏:{Colors.RESET}")
-                print(f"    {result['motd']}")
-
-        # 显示延迟统计
-        print(f"\n{Colors.BOLD}延迟统计 (最近10次查询):{Colors.RESET}")
-        if server['query_history']:
-            query_times = [item['query_time'] for item in server['query_history']]
-            avg_delay = sum(query_times) / len(query_times)
-            min_delay = min(query_times)
-            max_delay = max(query_times)
-
-            print(f"  {Colors.BLUE}平均延迟:{Colors.RESET} {avg_delay:.1f}ms")
-            print(f"  {Colors.BLUE}最低延迟:{Colors.RESET} {min_delay}ms")
-            print(f"  {Colors.BLUE}最高延迟:{Colors.RESET} {max_delay}ms")
-            print(f"  {Colors.BLUE}查询次数:{Colors.RESET} {len(query_times)}")
-
-            # 显示延迟趋势
-            if len(query_times) > 1:
-                trend = "稳定"
-                if query_times[-1] > avg_delay * 1.5:
-                    trend = f"{Colors.RED}上升{Colors.RESET}"
-                elif query_times[-1] < avg_delay * 0.5:
-                    trend = f"{Colors.GREEN}下降{Colors.RESET}"
-                print(f"  {Colors.BLUE}趋势:{Colors.RESET} {trend}")
-        else:
-            print(f"  {Colors.YELLOW}暂无历史数据{Colors.RESET}")
-
-        # 显示玩家统计
-        print(f"\n{Colors.BOLD}玩家统计 (最近10次查询):{Colors.RESET}")
-        if server['player_history']:
-            player_counts = [item['online'] for item in server['player_history']]
-            avg_players = sum(player_counts) / len(player_counts)
-            min_players = min(player_counts)
-            max_players = max(player_counts)
-
-            print(f"  {Colors.BLUE}平均在线:{Colors.RESET} {avg_players:.1f}")
-            print(f"  {Colors.BLUE}最低在线:{Colors.RESET} {min_players}")
-            print(f"  {Colors.BLUE}最高在线:{Colors.RESET} {max_players}")
-
-            # 显示最近一次查询的玩家列表
-            if 'error' not in result and 'players' in result and 'sample' in result['players']:
-                sample_players = result['players']['sample']
-                if sample_players and len(sample_players) > 0:
-                    print(f"  {Colors.BLUE}当前在线玩家:{Colors.RESET}")
-                    for i, player in enumerate(sample_players[:5]):  # 最多显示5个
-                        print(f"    {Colors.GREEN}•{Colors.RESET} {player.get('name', '未知')}")
-
-                    if len(sample_players) > 5:
-                        print(f"    {Colors.CYAN}... 还有 {len(sample_players) - 5} 个玩家{Colors.RESET}")
-        else:
-            print(f"  {Colors.YELLOW}暂无历史数据{Colors.RESET}")
-
-        # 显示mod列表（仅Java版）
-        if server_type == 'java' and server.get('mod_list'):
-            print(f"\n{Colors.BOLD}Mod列表 ({len(server['mod_list'])} 个):{Colors.RESET}")
-
-            if not show_all_mods and len(server['mod_list']) > 10:
-                # 显示前5个和后5个mod
-                for i, mod in enumerate(server['mod_list'][:5]):
-                    print(f"  {Colors.GREEN}•{Colors.RESET} {mod.get('modid', '未知')} - {mod.get('version', '未知')}")
-
-                print(f"  {Colors.CYAN}... 省略 {len(server['mod_list']) - 10} 个mod ...{Colors.RESET}")
-
-                for i, mod in enumerate(server['mod_list'][-5:]):
-                    idx = len(server['mod_list']) - 5 + i
-                    print(f"  {Colors.GREEN}•{Colors.RESET} {mod.get('modid', '未知')} - {mod.get('version', '未知')}")
-
-                print(f"\n{Colors.CYAN}使用 'info {index+1} -allmod' 查看完整mod列表{Colors.RESET}")
-            else:
-                # 显示所有mod
-                for i, mod in enumerate(server['mod_list']):
-                    print(f"  {Colors.GREEN}•{Colors.RESET} {mod.get('modid', '未知')} - {mod.get('version', '未知')}")
-
-        print("-" * 60)
-
-        # 等待用户按回车返回
-        input(f"{Colors.CYAN}按回车键返回主菜单...{Colors.RESET}")
-
-    def chat_server(self, index):
-      """连接到指定服务器的聊天"""
-      if index < 0 or index >= len(self.servers):
-        print(f"{Colors.RED}无效的服务器序号{Colors.RESET}")
-        return False
-
-      if not SERVER_INFO_AVAILABLE:
-        print(f"{Colors.RED}聊天功能需要server_info模块，但未找到{Colors.RESET}")
-        return False
-
-      server = self.servers[index]
-      server_type = server.get('type', 'java')
-      port = server.get('port', 25565 if server_type == 'java' else 19132)
-
-      if server_type != 'java':
-        print(f"{Colors.RED}只有Java版服务器支持聊天功能{Colors.RESET}")
-        return False
-
-      print(f"{Colors.CYAN}正在连接到 {server['name']} 的聊天...{Colors.RESET}")
-
-      # 获取聊天用户名
-      username = server.get('chat_username', f"Player{random.randint(1000, 9999)}")
-      print(f"{Colors.CYAN}使用用户名: {username}{Colors.RESET}")
-
-      # 先尝试获取服务器版本信息
-      print(f"{Colors.CYAN}正在检测服务器版本...{Colors.RESET}")
-      try:
-        result = MinecraftPing.ping(server['ip'], port, timeout=5, server_type="java")
-        if 'error' in result:
-          print(f"{Colors.YELLOW}无法检测服务器版本，使用默认版本{Colors.RESET}")
-          server_version = None
-        else:
-          server_version = result.get('version', {}).get('name', None)
-          if server_version:
-            print(f"{Colors.GREEN}检测到服务器版本: {server_version}{Colors.RESET}")
-          else:
-            print(f"{Colors.YELLOW}无法获取服务器版本，使用默认版本{Colors.RESET}")
-            server_version = None
-      except Exception as e:
-        print(f"{Colors.YELLOW}版本检测失败: {str(e)}{Colors.RESET}")
-        server_version = None
-
-      # 创建聊天客户端
-      global global_chat_client
-      try:
-        # 获取服务器的mod列表
-        forge_mods = server.get('mod_list', [])
-
-        # 添加调试信息
-        print(f"{Colors.CYAN}创建聊天客户端实例...{Colors.RESET}")
-        chat_client = MinecraftChatClient(server['ip'], port, username, server_version)
-        chat_client.set_server_name(server['name'])
-
-        # 设置Forge mod列表
-        if forge_mods:
-          chat_client.set_forge_mods(forge_mods)
-          print(f"{Colors.GREEN}检测到Forge服务器，已加载 {len(forge_mods)} 个Mod{Colors.RESET}")
-
-        # 设置消息回调
-        def chat_callback(sender, message):
-          timestamp = datetime.now().strftime("%H:%M:%S")
-          print(f"{Colors.CYAN}[{timestamp}] {Colors.GREEN}{sender}:{Colors.RESET} {message}")
-
-        chat_client.set_chat_callback(chat_callback)
-
-        # 连接到服务器
-        if chat_client.start_listening():
-          global_chat_client = chat_client
-          print(f"{Colors.GREEN}已连接到聊天，输入消息发送，输入 '/quit' 退出聊天{Colors.RESET}")
-
-          # 聊天循环
-          while True:
-            try:
-              message = input().strip()
-              if message.lower() == '/quit':
-                break
-              if message:
-                chat_client.send_chat_message(message)
-            except KeyboardInterrupt:
-              print(f"\n{Colors.YELLOW}退出聊天{Colors.RESET}")
-              break
-
-          # 断开连接
-          chat_client.stop()
-          global_chat_client = None
-          print(f"{Colors.GREEN}已断开聊天连接{Colors.RESET}")
-        else:
-          print(f"{Colors.RED}连接聊天失败{Colors.RESET}")
-          return False
-
-      except Exception as e:
-        print(f"{Colors.RED}聊天连接错误: {str(e)}{Colors.RESET}")
-        return False
-
-      return True
-
 def print_help(manager):
     """打印帮助信息"""
     print(f"\n{Colors.BOLD}可用命令:{Colors.RESET}")
@@ -1764,11 +2079,20 @@ def print_help(manager):
     print(f"  {Colors.GREEN}info <序号>{Colors.RESET}: 查看指定服务器的详细信息")
     print(f"  {Colors.GREEN}info <序号> -allmod{Colors.RESET}: 查看指定服务器的完整mod列表")
     print(f"  {Colors.GREEN}chat <序号>{Colors.RESET}: 连接到指定服务器的聊天")
+    print(f"  {Colors.GREEN}monitor <序号>{Colors.RESET}: 监控指定服务器的状态变化")
     print(f"  {Colors.GREEN}scan{Colors.RESET}: 扫描IP/域名下的Minecraft服务器端口")
     print(f"  {Colors.GREEN}scanall{Colors.RESET}: 扫描IP/域名下的所有端口 (1-65535)")
     print(f"  {Colors.GREEN}mods <序号>{Colors.RESET}: 配置指定服务器的Mod列表")
     print(f"  {Colors.GREEN}h{Colors.RESET}: 显示帮助")
     print(f"  {Colors.GREEN}q{Colors.RESET}: 退出")
+
+    # 监控功能说明
+    print(f"\n{Colors.BOLD}监控功能说明:{Colors.RESET}")
+    print(f"  • 实时监控服务器状态变化")
+    print(f"  • 检测玩家加入/退出事件")
+    print(f"  • 按 '+' 增加刷新间隔，'-' 减少刷新间隔")
+    print(f"  • 按 'r' 手动刷新")
+    print(f"  • 按 'q' 或 Ctrl+C 退出监控模式")
 
     # 聊天功能说明
     print(f"\n{Colors.BOLD}聊天功能说明:{Colors.RESET}")
@@ -1850,7 +2174,7 @@ def main():
                     continue
 
                 # 设置默认服务器类型
-                server_type = 'java'
+                server_type = SERVER_TYPE_JAVA
 
                 # 自动检测服务器类型
                 print(f"{Colors.CYAN}正在尝试自动检测服务器类型...{Colors.RESET}")
@@ -1869,7 +2193,7 @@ def main():
                     if server_type_input in ['java', 'bedrock']:
                         server_type = server_type_input
                     else:
-                        server_type = 'java'
+                        server_type = SERVER_TYPE_JAVA
                 else:
                     # 尝试自动检测
                     detected_type = MinecraftPing.detect_server_type(ip, port)
@@ -1886,10 +2210,10 @@ def main():
                         if server_type_input in ['java', 'bedrock']:
                             server_type = server_type_input
                         else:
-                            server_type = 'java'
+                            server_type = SERVER_TYPE_JAVA
 
                 # 如果用户没有输入端口，但选择了基岩版，使用基岩版默认端口
-                if not port_str and server_type == 'bedrock':
+                if not port_str and server_type == SERVER_TYPE_BEDROCK:
                     port = 19132
 
                 note = input("备注 (可选): ").strip()
@@ -2060,6 +2384,22 @@ def main():
                     print(f"{Colors.RED}无效的服务器序号{Colors.RESET}")
             except ValueError:
                 print(f"{Colors.RED}请输入有效的服务器序号{Colors.RESET}")
+        elif cmd.startswith('monitor '):  # 监控服务器状态
+            try:
+                parts = cmd.split()
+                if len(parts) < 2:
+                    print(f"{Colors.RED}请指定服务器序号{Colors.RESET}")
+                    continue
+
+                index = int(parts[1]) - 1
+                actual_index = manager.current_page * manager.page_size + index
+
+                if 0 <= actual_index < len(manager.servers):
+                    manager.monitor_server(actual_index)
+                else:
+                    print(f"{Colors.RED}无效的服务器序号{Colors.RESET}")
+            except ValueError:
+                print(f"{Colors.RED}请输入有效的服务器序号{Colors.RESET}")
         elif cmd == 'scan':  # 扫描端口
             try:
                 host = input("输入要扫描的IP地址或域名: ").strip()
@@ -2153,7 +2493,7 @@ def main():
                 if 0 <= actual_index < len(manager.servers):
                     server = manager.servers[actual_index]
 
-                    if server.get('type', 'java') != 'java':
+                    if server.get('type', SERVER_TYPE_JAVA) != SERVER_TYPE_JAVA:
                         print(f"{Colors.RED}只有Java版服务器需要配置Mod{Colors.RESET}")
                         continue
 

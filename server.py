@@ -13,6 +13,14 @@ import queue
 from collections import deque
 import random
 
+# 导入监控模块
+try:
+    from server_monitor import ServerMonitor, MonitorEvent
+except ImportError:
+    print("警告: 未找到server_monitor模块，监控功能将受限")
+    ServerMonitor = None
+    MonitorEvent = None
+
 # 配置文件路径
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 JSON_FILE = os.path.join(SCRIPT_DIR, "servers.json")
@@ -67,39 +75,6 @@ try:
 except ImportError:
     SERVER_INFO_AVAILABLE = False
     print(f"{Colors.YELLOW}警告: 未找到server_info模块，详细查询功能将受限{Colors.RESET}")
-
-# === 监控事件类 ===
-class MonitorEvent:
-    """监控事件类"""
-    def __init__(self, event_type, message, timestamp=None, player_name=None):
-        self.event_type = event_type  # status_change, player_join, player_leave, info
-        self.message = message
-        self.timestamp = timestamp or time.time()
-        self.player_name = player_name
-        self.color = self._get_color()
-    
-    def _get_color(self):
-        """根据事件类型获取颜色"""
-        if self.event_type == 'status_change':
-            if "上线" in self.message:
-                return Colors.GREEN
-            elif "下线" in self.message:
-                return Colors.RED
-            return Colors.YELLOW
-        elif self.event_type == 'player_join':
-            return Colors.GREEN
-        elif self.event_type == 'player_leave':
-            return Colors.RED
-        else:
-            return Colors.CYAN
-    
-    def format_time(self):
-        """格式化时间戳"""
-        dt = datetime.fromtimestamp(self.timestamp)
-        return dt.strftime("%H:%M:%S.%f")[:-3]  # 毫秒精度
-    
-    def __str__(self):
-        return f"{Colors.CYAN}[{self.format_time()}]{self.color} {self.message}{Colors.RESET}"
 
 # === Forge/FML mod 列表缓存与探测 ===
 try:
@@ -631,336 +606,6 @@ class MinecraftPing:
         """打包字符串"""
         data = s.encode('utf-8')
         return MinecraftPing._pack_varint(len(data)) + data
-
-# === 服务器监控器 ===
-class ServerMonitor:
-    """服务器监控器"""
-    
-    def __init__(self, manager, server_index):
-        self.manager = manager
-        self.server_index = server_index
-        self.server = manager.servers[server_index]
-        self.events = deque(maxlen=100)  # 最多保存100条事件
-        self.last_result = None
-        self.last_players = set()
-        self.is_running = False
-        self.refresh_interval = 30  # 默认30秒刷新
-        
-    def start(self):
-        """开始监控"""
-        self.is_running = True
-        self.events.clear()
-        
-        # 添加开始监控事件
-        self.add_event('info', f"开始监控服务器: {self.server['name']}")
-        
-        try:
-            while self.is_running:
-                # 查询服务器状态
-                self.check_server_status()
-                
-                # 显示当前状态和事件
-                self.display_status()
-                
-                # 等待用户输入或刷新间隔
-                if not self.wait_for_input():
-                    break
-                    
-        except KeyboardInterrupt:
-            print(f"\n{Colors.YELLOW}监控已中断{Colors.RESET}")
-        finally:
-            self.is_running = False
-            self.add_event('info', f"停止监控服务器: {self.server['name']}")
-    
-    def check_server_status(self):
-        """检查服务器状态变化"""
-        server = self.server
-        server_type = server.get('type', SERVER_TYPE_JAVA)
-        port = server.get('port', 25565 if server_type == SERVER_TYPE_JAVA else 19132)
-        
-        # 查询服务器
-        current_result = MinecraftPing.ping(
-            server['ip'], port, timeout=5, 
-            use_cache=False, server_type=server_type
-        )
-        
-        # 检查服务器状态变化
-        if self.last_result is not None:
-            last_online = 'error' not in self.last_result
-            current_online = 'error' not in current_result
-            
-            if last_online != current_online:
-                if current_online:
-                    self.add_event('status_change', f"服务器状态: 离线 → 上线")
-                else:
-                    error_msg = current_result.get('error', '未知错误')
-                    self.add_event('status_change', f"服务器状态: 上线 → 离线 ({error_msg})")
-        
-        # 检查玩家变化（仅Java版且在线）
-        if server_type == SERVER_TYPE_JAVA and 'error' not in current_result:
-            current_players = set()
-            if ('players' in current_result and 
-                'sample' in current_result['players']):
-                for player in current_result['players']['sample']:
-                    player_name = player.get('name', '未知')
-                    # 清理玩家名字中的颜色代码
-                    clean_name = MinecraftPing.clean_mc_formatting(player_name)
-                    current_players.add(clean_name)
-            
-            if self.last_players is not None:
-                # 玩家加入
-                new_players = current_players - self.last_players
-                for player in new_players:
-                    self.add_event('player_join', f"玩家加入: {player}", player_name=player)
-                
-                # 玩家退出
-                left_players = self.last_players - current_players
-                for player in left_players:
-                    self.add_event('player_leave', f"玩家退出: {player}", player_name=player)
-            
-            self.last_players = current_players
-        
-        self.last_result = current_result
-    
-    def add_event(self, event_type, message, player_name=None):
-        """添加事件到事件列表"""
-        event = MonitorEvent(event_type, message, player_name=player_name)
-        self.events.append(event)
-    
-    def display_status(self):
-        """显示服务器状态和事件"""
-        import os
-        
-        # 清屏（跨平台）
-        os.system('cls' if os.name == 'nt' else 'clear')
-        
-        # 显示标题和控制信息
-        print(f"{Colors.BOLD}{Colors.CYAN}服务器监控: {self.server['name']}{Colors.RESET}")
-        print(f"{Colors.CYAN}地址: {self.server['ip']}:{self.server.get('port', 25565)}{Colors.RESET}")
-        print(f"{Colors.CYAN}刷新间隔: {self.refresh_interval}秒 | 事件数量: {len(self.events)}{Colors.RESET}")
-        print(f"{Colors.YELLOW}按 'q' 返回，'+'/-' 调整刷新间隔，'r' 立即刷新{Colors.RESET}")
-        print("=" * 80)
-        
-        # 显示服务器详细信息（与主查询相同的格式）
-        self.display_server_details()
-        
-        print("=" * 80)
-        
-        # 显示最近的事件
-        self.display_event_log()
-        
-        print("=" * 80)
-        print(f"{Colors.CYAN}按 'q' 返回，'+'/-' 调整刷新间隔，'r' 立即刷新{Colors.RESET}")
-    
-    def display_server_details(self):
-        """显示服务器详细信息（与主查询相同的格式）"""
-        server = self.server
-        server_type = server.get('type', SERVER_TYPE_JAVA)
-        
-        # 序号颜色
-        index_color = Colors.CYAN
-        if self.last_result and 'error' in self.last_result and ("离线" in self.last_result['error'] or "timed out" in self.last_result['error']):
-            index_color = Colors.RED
-        elif self.last_result and 'players' in self.last_result and self.last_result['players'].get('online', 0) > 0:
-            index_color = Colors.GREEN
-
-        # 服务器类型标识
-        server_type = self.last_result.get('server_type', server.get('type', SERVER_TYPE_JAVA)) if self.last_result else server.get('type', SERVER_TYPE_JAVA)
-        type_display = f" [{Colors.MAGENTA}基岩版{Colors.RESET}]" if server_type == SERVER_TYPE_BEDROCK else f" [{Colors.BLUE}Java版{Colors.RESET}]"
-
-        print(f"\n{index_color}[监控中]{Colors.RESET} {Colors.BOLD}{server['name']}{type_display}{Colors.RESET}")
-        print(f"{Colors.BLUE}地址:{Colors.RESET} {server['ip']}:{server.get('port', 25565 if server_type == SERVER_TYPE_JAVA else 19132)}")
-        
-        # 显示SRV解析信息
-        if self.last_result and 'srv_info' in self.last_result:
-            srv_info = self.last_result['srv_info']
-            print(f"{Colors.CYAN}SRV解析:{Colors.RESET} {srv_info['original_host']}:{srv_info['original_port']} → {srv_info['resolved_host']}:{srv_info['resolved_port']}")
-
-        if 'note' in server and server['note']:
-            print(f"{Colors.YELLOW}备注:{Colors.RESET} {server['note']}")
-
-        # 显示最后查询时间
-        if server.get('last_query', 0) > 0:
-            last_query_time = datetime.fromtimestamp(server['last_query']).strftime('%Y-%m-%d %H:%M:%S')
-            print(f"{Colors.YELLOW}上次查询:{Colors.RESET} {last_query_time}")
-
-        # 显示公告栏
-        if self.last_result and 'motd' in self.last_result and self.last_result['motd']:
-            # 计算终端宽度
-            try:
-                terminal_width = os.get_terminal_size().columns
-            except:
-                terminal_width = 80
-
-            # 分隔线
-            print(f"{Colors.CYAN}┌{'─' * (terminal_width - 2)}┐{Colors.RESET}")
-
-            # 显示公告栏内容
-            motd = self.last_result['motd']
-            print(f"{Colors.CYAN}│{Colors.RESET} {motd}")
-
-            # 分隔线
-            print(f"{Colors.CYAN}└{'─' * (terminal_width - 2)}┘{Colors.RESET}")
-
-        if not self.last_result:
-            print(f"{Colors.YELLOW}状态: 等待第一次查询...{Colors.RESET}")
-        elif 'error' in self.last_result:
-            # 离线状态
-            if "timed out" in self.last_result['error'] or "离线" in self.last_result['error']:
-                error_color = Colors.RED
-            else:
-                error_color = Colors.YELLOW
-
-            print(f"{error_color}状态: {self.last_result['error']}{Colors.RESET}")
-            if self.last_result.get('connect_time', 0) > 0:
-                print(f"{Colors.BLUE}连接时间:{Colors.RESET} {self.last_result['connect_time']}ms")
-        else:
-            # 服务器版本
-            version = self.last_result.get('version', {}).get('name', '未知')
-            if server_type == SERVER_TYPE_BEDROCK:
-                version_color = Colors.MAGENTA
-                version_display = f"{version}"
-            else:
-                if '1.21' in version or '1.20' in version:
-                    version_color = Colors.GREEN
-                elif '1.19' in version or '1.18' in version:
-                    version_color = Colors.YELLOW
-                else:
-                    version_color = Colors.RED
-                version_display = f"{version}"
-
-            print(f"{Colors.BLUE}版本:{Colors.RESET} {version_color}{version_display}{Colors.RESET}")
-
-            # 玩家数量
-            players = self.last_result.get('players', {})
-            online = players.get('online', 0)
-            max_players = players.get('max', 0)
-
-            # 根据在线人数选择颜色
-            if online == 0:
-                player_color = Colors.RED
-            elif online < max_players * 0.5:
-                player_color = Colors.YELLOW
-            else:
-                player_color = Colors.GREEN
-
-            print(f"{Colors.BLUE}玩家:{Colors.RESET} {player_color}{online}{Colors.RESET}/{max_players}")
-
-            # 显示玩家列表（如果可用）
-            if server_type != SERVER_TYPE_BEDROCK and 'players' in self.last_result and 'sample' in self.last_result['players']:
-                sample_players = self.last_result['players']['sample']
-                if sample_players and len(sample_players) > 0:
-                    print(f"{Colors.BLUE}在线玩家:{Colors.RESET}")
-                    for player in sample_players[:5]:  # 最多显示5个
-                        player_name = player.get('name', '未知')
-                        # 安全地转换玩家名字中的颜色代码
-                        safe_name = MinecraftPing.safe_convert_mc_formatting(player_name, Colors.RESET)
-                        print(f"  {Colors.GREEN}•{Colors.RESET} {safe_name}")
-
-                    # 如果还有更多玩家，显示提示
-                    if len(sample_players) > 5:
-                        print(f"  {Colors.CYAN}... 还有 {len(sample_players) - 5} 个玩家{Colors.RESET}")
-
-            # 延迟信息
-            if self.last_result.get('query_time', 0) > 0:
-                delay_color = Colors.GREEN
-                if self.last_result['query_time'] > 500:
-                    delay_color = Colors.YELLOW
-                if self.last_result['query_time'] > 1000:
-                    delay_color = Colors.RED
-
-                delay_info = f"{Colors.BLUE}延迟:{Colors.RESET} {delay_color}{self.last_result['query_time']}ms{Colors.RESET}"
-                if self.last_result.get('connect_time', 0) > 0:
-                    delay_info += f" ({Colors.BLUE}连接:{Colors.RESET} {self.last_result['connect_time']}ms)"
-                print(delay_info)
-
-            # 基岩版特定信息
-            if server_type == SERVER_TYPE_BEDROCK:
-                if 'game_mode' in self.last_result and self.last_result['game_mode']:
-                    print(f"{Colors.BLUE}游戏模式:{Colors.RESET} {self.last_result['game_mode']}")
-                if 'edition' in self.last_result and self.last_result['edition']:
-                    print(f"{Colors.BLUE}版本:{Colors.RESET} {self.last_result['edition']}")
-    
-    def display_event_log(self):
-        """显示事件日志"""
-        print(f"\n{Colors.BOLD}事件日志:{Colors.RESET}")
-        
-        # 获取终端高度
-        try:
-            terminal_height = os.get_terminal_size().lines
-            max_events = max(5, terminal_height - 30)  # 留出空间显示其他信息
-        except:
-            max_events = 10
-        
-        if len(self.events) > max_events:
-            events_to_show = list(self.events)[-max_events:]
-            print(f"{Colors.CYAN}显示最近 {len(events_to_show)} 条事件 (共 {len(self.events)} 条){Colors.RESET}")
-        else:
-            events_to_show = list(self.events)
-        
-        if not events_to_show:
-            print(f"  {Colors.YELLOW}暂无事件{Colors.RESET}")
-            return
-            
-        for event in events_to_show:
-            print(f"  {event}")
-    
-    def wait_for_input(self):
-        """等待用户输入或刷新间隔"""
-        start_time = time.time()
-        
-        while time.time() - start_time < self.refresh_interval:
-            # 检查是否有输入（非阻塞）
-            if IS_WINDOWS:
-                # Windows平台使用msvcrt
-                try:
-                    import msvcrt
-                    if msvcrt.kbhit():
-                        key = msvcrt.getch().decode('utf-8', errors='ignore').lower()
-                        if key == 'q':
-                            return False
-                        elif key == '+':
-                            self.refresh_interval = min(300, self.refresh_interval + 5)
-                            self.add_event('info', f"刷新间隔增加至 {self.refresh_interval}秒")
-                            return True  # 立即刷新显示
-                        elif key == '-':
-                            self.refresh_interval = max(5, self.refresh_interval - 5)
-                            self.add_event('info', f"刷新间隔减少至 {self.refresh_interval}秒")
-                            return True  # 立即刷新显示
-                        elif key == 'r':
-                            self.add_event('info', "手动刷新")
-                            return True  # 立即刷新显示
-                except ImportError:
-                    # 如果没有msvcrt，使用简单的time.sleep
-                    pass
-            else:
-                # Unix-like平台使用select
-                try:
-                    if sys.stdin in select.select([sys.stdin], [], [], 0.1)[0]:
-                        try:
-                            key = sys.stdin.read(1).lower()
-                            if key == 'q':
-                                return False
-                            elif key == '+':
-                                self.refresh_interval = min(300, self.refresh_interval + 5)
-                                self.add_event('info', f"刷新间隔增加至 {self.refresh_interval}秒")
-                                return True  # 立即刷新显示
-                            elif key == '-':
-                                self.refresh_interval = max(5, self.refresh_interval - 5)
-                                self.add_event('info', f"刷新间隔减少至 {self.refresh_interval}秒")
-                                return True  # 立即刷新显示
-                            elif key == 'r':
-                                self.add_event('info', "手动刷新")
-                                return True  # 立即刷新显示
-                        except (KeyboardInterrupt, EOFError):
-                            return False
-                except:
-                    # select可能失败，使用简单的time.sleep
-                    pass
-            
-            time.sleep(0.1)
-        
-        return True  # 继续监控
 
 # === 服务器管理器 ===
 class ServerManager:
@@ -1618,6 +1263,11 @@ class ServerManager:
             print(f"{Colors.RED}无效的服务器序号{Colors.RESET}")
             return False
         
+        # 检查监控模块是否可用
+        if ServerMonitor is None:
+            print(f"{Colors.RED}监控模块未加载，无法启动监控功能{Colors.RESET}")
+            return False
+        
         # 创建监控器
         monitor = ServerMonitor(self, index)
         
@@ -2089,9 +1739,10 @@ def print_help(manager):
     # 监控功能说明
     print(f"\n{Colors.BOLD}监控功能说明:{Colors.RESET}")
     print(f"  • 实时监控服务器状态变化")
-    print(f"  • 检测玩家加入/退出事件")
+    print(f"  • 检测玩家加入/退出事件和玩家数量变化")
     print(f"  • 按 '+' 增加刷新间隔，'-' 减少刷新间隔")
-    print(f"  • 按 'r' 手动刷新")
+    print(f"  • 按 'r' 手动刷新，'t' 切换事件排序方式")
+    print(f"  • 按 'l' 查看完整日志，支持滚动和导出")
     print(f"  • 按 'q' 或 Ctrl+C 退出监控模式")
 
     # 聊天功能说明

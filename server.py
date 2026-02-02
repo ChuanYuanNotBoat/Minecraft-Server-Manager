@@ -13,14 +13,6 @@ import queue
 from collections import deque
 import random
 
-# 导入监控模块
-try:
-    from server_monitor import ServerMonitor, MonitorEvent
-except ImportError:
-    print("警告: 未找到server_monitor模块，监控功能将受限")
-    ServerMonitor = None
-    MonitorEvent = None
-
 # 配置文件路径
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 JSON_FILE = os.path.join(SCRIPT_DIR, "servers.json")
@@ -29,6 +21,16 @@ MODS_DIR = os.path.join(SCRIPT_DIR, "mods_config")
 
 # 检测操作系统并设置颜色支持
 IS_WINDOWS = os.name == 'nt'
+
+
+# 全局变量
+global_cancel_query = False
+global_chat_client = None
+
+# 服务器类型常量
+SERVER_TYPE_JAVA = "java"
+SERVER_TYPE_BEDROCK = "bedrock"
+SERVER_TYPE_UNKNOWN = "unknown"
 
 # ANSI 颜色代码
 class Colors:
@@ -59,14 +61,20 @@ class Colors:
     BG_CYAN = '\033[46m'
     BG_WHITE = '\033[47m'
 
-# 全局变量
-global_cancel_query = False
-global_chat_client = None
+# 导入监控模块
+try:
+    from server_monitor import ServerMonitor, MonitorEvent, MultiServerMonitor, monitor_multiple_servers, monitor_all_servers
+    SERVER_MONITOR_AVAILABLE = True
+except ImportError as e:
+    print(f"{Colors.YELLOW}警告: 未找到server_monitor模块，监控功能将受限: {str(e)}{Colors.RESET}")
+    ServerMonitor = None
+    MonitorEvent = None
+    MultiServerMonitor = None
+    monitor_multiple_servers = None
+    monitor_all_servers = None
+    SERVER_MONITOR_AVAILABLE = False
 
-# 服务器类型常量
-SERVER_TYPE_JAVA = "java"
-SERVER_TYPE_BEDROCK = "bedrock"
-SERVER_TYPE_UNKNOWN = "unknown"
+
 
 # 尝试导入server_info模块
 try:
@@ -1730,6 +1738,7 @@ def print_help(manager):
     print(f"  {Colors.GREEN}info <序号> -allmod{Colors.RESET}: 查看指定服务器的完整mod列表")
     print(f"  {Colors.GREEN}chat <序号>{Colors.RESET}: 连接到指定服务器的聊天")
     print(f"  {Colors.GREEN}monitor <序号>{Colors.RESET}: 监控指定服务器的状态变化")
+    print(f"  {Colors.GREEN}monitor <序号1> <序号2> ...{Colors.RESET}: 同时监控多个服务器的状态变化")
     print(f"  {Colors.GREEN}scan{Colors.RESET}: 扫描IP/域名下的Minecraft服务器端口")
     print(f"  {Colors.GREEN}scanall{Colors.RESET}: 扫描IP/域名下的所有端口 (1-65535)")
     print(f"  {Colors.GREEN}mods <序号>{Colors.RESET}: 配置指定服务器的Mod列表")
@@ -2041,16 +2050,41 @@ def main():
                 if len(parts) < 2:
                     print(f"{Colors.RED}请指定服务器序号{Colors.RESET}")
                     continue
-
-                index = int(parts[1]) - 1
-                actual_index = manager.current_page * manager.page_size + index
-
-                if 0 <= actual_index < len(manager.servers):
-                    manager.monitor_server(actual_index)
+                
+                # 检查是否是 "all" 命令
+                if parts[1].lower() == 'all':
+                    # 监控所有服务器
+                    from server_monitor import monitor_all_servers
+                    if monitor_all_servers(manager):
+                        print(f"{Colors.GREEN}已开始监控所有服务器{Colors.RESET}")
+                    continue
+                
+                # 解析所有服务器序号
+                indices = []
+                for part in parts[1:]:
+                    try:
+                        # 计算实际索引（考虑分页）
+                        index = int(part) - 1
+                        actual_index = manager.current_page * manager.page_size + index
+                        
+                        if 0 <= actual_index < len(manager.servers):
+                            indices.append(actual_index)
+                        else:
+                            print(f"{Colors.RED}无效的服务器序号: {part}{Colors.RESET}")
+                            break
+                    except ValueError:
+                        print(f"{Colors.RED}无效的服务器序号: {part}{Colors.RESET}")
+                        break
+                
+                # 如果所有序号都有效，启动监控
+                if indices:
+                    from server_monitor import monitor_multiple_servers
+                    if monitor_multiple_servers(manager, indices):
+                        print(f"{Colors.GREEN}已开始监控 {len(indices)} 个服务器{Colors.RESET}")
                 else:
-                    print(f"{Colors.RED}无效的服务器序号{Colors.RESET}")
-            except ValueError:
-                print(f"{Colors.RED}请输入有效的服务器序号{Colors.RESET}")
+                    print(f"{Colors.RED}未指定有效的服务器序号{Colors.RESET}")
+            except Exception as e:
+                print(f"{Colors.RED}监控启动失败: {str(e)}{Colors.RESET}")
         elif cmd == 'scan':  # 扫描端口
             try:
                 host = input("输入要扫描的IP地址或域名: ").strip()

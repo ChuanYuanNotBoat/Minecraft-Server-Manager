@@ -3,3 +3,4 @@ servers.json
 mods_config/
 __pycache__/
 config.json
+logs/

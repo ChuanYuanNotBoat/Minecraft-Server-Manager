@@ -4,3 +4,6 @@ mods_config/
 __pycache__/
 config.json
 logs/
+notification_config.json
+.gitignore
+minecraft_monitor_icon.png

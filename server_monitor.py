@@ -4,6 +4,7 @@ server_monitor.py - Minecraft服务器监控模块
 支持多服务器同时监控和按服务器分类查看
 支持独立运行和从命令行参数启动
 支持详细日志记录和查看
+支持系统通知功能
 """
 
 import os
@@ -91,6 +92,28 @@ class MonitorLogger:
             # 写入日志文件
             with open(daily_log_file, 'a', encoding='utf-8') as f:
                 f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+            
+            # 发送系统通知
+            try:
+                notification_manager = get_notification_manager()
+                
+                if notification_manager.should_notify(event_type, player_name):
+                    title = notification_manager.get_notification_title(event_type)
+                    
+                    # 构建通知消息
+                    notify_message = message
+                    if diff is not None:
+                        diff_sign = "+" if diff > 0 else ""
+                        notify_message = f"{message} ({diff_sign}{diff})"
+                    
+                    # 发送通知
+                    notification_manager.send_notification(title, notify_message, server_name, event_type)
+                    
+                    # 记录通知发送（可选）
+                    # print(f"{Colors.CYAN}[通知] {server_name}: {title} - {notify_message}{Colors.RESET}")
+            except Exception as e:
+                # 通知失败不影响主流程
+                pass  # 静默处理通知错误
             
             return True
         except Exception as e:
@@ -334,6 +357,512 @@ def get_minecraft_ping():
         print(f"{Colors.YELLOW}[监控] 使用简化版MinecraftPing{Colors.RESET}")
     
     return _MinecraftPing
+
+# ========== 系统通知管理器 ==========
+class NotificationManager:
+    """系统通知管理器，支持Windows/Linux/macOS系统通知"""
+    
+    NOTIFY_TYPES = {
+        'status_change': '状态变化',
+        'player_join': '玩家加入',
+        'player_leave': '玩家退出',
+        'player_count': '玩家数量变化',
+        'info': '信息'
+    }
+    
+    # 默认配置
+    DEFAULT_CONFIG = {
+        'enabled': False,
+        'notify_types': ['status_change'],  # 默认只通知状态变化
+        'show_icon': True,
+        'notification_duration': 5,  # 通知显示时间（秒）
+        'min_notify_interval': 30,   # 相同事件最小通知间隔（秒）
+        'suppress_player_changes': False  # 抑制玩家频繁进出通知
+    }
+    
+    def __init__(self, config_file="notification_config.json"):
+        """初始化通知管理器"""
+        self.config_file = config_file
+        self.config = self.DEFAULT_CONFIG.copy()
+        self.last_notify_time = {}  # 记录各事件类型的最后通知时间
+        self.suppress_cache = {}    # 玩家变化抑制缓存
+        self.icon_path = None       # 图标路径
+        
+        # 检测操作系统
+        self.os_type = self._detect_os()
+        
+        # 加载配置
+        self.load_config()
+        
+        # 初始化图标
+        self._init_icon()
+    
+    def _detect_os(self):
+        """检测操作系统类型"""
+        import platform
+        system = platform.system().lower()
+        
+        if 'windows' in system:
+            return 'windows'
+        elif 'darwin' in system:
+            return 'macos'
+        elif 'linux' in system:
+            return 'linux'
+        else:
+            return 'unknown'
+    
+    def _init_icon(self):
+        """初始化图标"""
+        # 如果启用了图标显示，尝试获取图标路径
+        if self.config.get('show_icon', True):
+            self.icon_path = self._get_icon_path()
+            if self.icon_path:
+                print(f"{Colors.GREEN}[通知] 使用图标: {self.icon_path}{Colors.RESET}")
+            else:
+                print(f"{Colors.YELLOW}[通知] 未找到图标文件{Colors.RESET}")
+    
+    def load_config(self):
+        """加载配置"""
+        try:
+            if os.path.exists(self.config_file):
+                with open(self.config_file, 'r', encoding='utf-8') as f:
+                    loaded_config = json.load(f)
+                    
+                    # 更新配置，保持默认值不变
+                    for key, value in loaded_config.items():
+                        if key in self.config:
+                            self.config[key] = value
+                    
+                print(f"{Colors.GREEN}[通知] 已加载配置: {self.config_file}{Colors.RESET}")
+                return True
+            else:
+                # 保存默认配置
+                self.save_config()
+                return False
+        except Exception as e:
+            print(f"{Colors.YELLOW}[通知] 加载配置失败: {str(e)}{Colors.RESET}")
+            return False
+    
+    def save_config(self):
+        """保存配置"""
+        try:
+            with open(self.config_file, 'w', encoding='utf-8') as f:
+                json.dump(self.config, f, ensure_ascii=False, indent=2)
+            return True
+        except Exception as e:
+            print(f"{Colors.RED}[通知] 保存配置失败: {str(e)}{Colors.RESET}")
+            return False
+    
+    def is_enabled(self):
+        """检查通知是否启用"""
+        return self.config.get('enabled', False)
+    
+    def should_notify(self, event_type, player_name=None):
+        """检查是否应该发送通知"""
+        if not self.is_enabled():
+            return False
+        
+        # 检查事件类型是否在通知列表中
+        if event_type not in self.config.get('notify_types', []):
+            return False
+        
+        # 检查最小通知间隔
+        current_time = time.time()
+        last_time = self.last_notify_time.get(event_type, 0)
+        min_interval = self.config.get('min_notify_interval', 30)
+        
+        if current_time - last_time < min_interval:
+            return False
+        
+        # 玩家变化抑制检查
+        if self.config.get('suppress_player_changes', False) and player_name:
+            cache_key = f"{event_type}_{player_name}"
+            cache_time = self.suppress_cache.get(cache_key, 0)
+            
+            # 如果同一玩家在短时间内多次变化，抑制通知
+            if current_time - cache_time < 300:  # 5分钟内
+                return False
+            
+            # 更新缓存
+            self.suppress_cache[cache_key] = current_time
+            
+            # 清理过期的缓存（超过30分钟）
+            self._clean_suppress_cache(1800)
+        
+        # 更新最后通知时间
+        self.last_notify_time[event_type] = current_time
+        return True
+    
+    def _clean_suppress_cache(self, max_age=1800):
+        """清理过期的抑制缓存"""
+        current_time = time.time()
+        expired_keys = []
+        
+        for key, timestamp in self.suppress_cache.items():
+            if current_time - timestamp > max_age:
+                expired_keys.append(key)
+        
+        for key in expired_keys:
+            del self.suppress_cache[key]
+    
+    def send_notification(self, title, message, server_name=None, event_type=None):
+        """发送系统通知"""
+        try:
+            # 构建完整标题 - 添加程序名称
+            app_name = "Minecraft-Server-Manager"
+            if server_name:
+                full_title = f"{app_name} - [{server_name}] {title}"
+            else:
+                full_title = f"{app_name} - {title}"
+            
+            # 调用系统特定的通知方法
+            if self.os_type == 'windows':
+                return self._send_windows_notification(full_title, message)
+            elif self.os_type == 'macos':
+                return self._send_macos_notification(full_title, message)
+            elif self.os_type == 'linux':
+                return self._send_linux_notification(full_title, message)
+            else:
+                print(f"{Colors.YELLOW}[通知] 不支持的操作系统: {self.os_type}{Colors.RESET}")
+                return False
+        except Exception as e:
+            # 静默处理通知错误，避免影响主程序
+            return False
+    
+    def _send_windows_notification(self, title, message):
+        """发送Windows通知（使用win10toast）"""
+        try:
+            from win10toast import ToastNotifier
+            duration = self.config.get('notification_duration', 5)
+            
+            toaster = ToastNotifier()
+            
+            # 尝试发送通知，如果失败则不带图标重试
+            try:
+                # 先尝试带图标
+                if self.config.get('show_icon', True) and self.icon_path and os.path.exists(self.icon_path):
+                    toaster.show_toast(
+                        title=title,
+                        msg=message,
+                        duration=duration,
+                        icon_path=self.icon_path,
+                        threaded=True
+                    )
+                else:
+                    # 不带图标
+                    toaster.show_toast(
+                        title=title,
+                        msg=message,
+                        duration=duration,
+                        threaded=True
+                    )
+            except Exception as e:
+                # 如果带图标失败，尝试不带图标
+                print(f"{Colors.YELLOW}[通知] Windows通知失败，尝试不带图标...{Colors.RESET}")
+                toaster.show_toast(
+                    title=title,
+                    msg=message,
+                    duration=duration,
+                    threaded=True
+                )
+            
+            return True
+        except ImportError:
+            print(f"{Colors.YELLOW}[通知] 需要安装 win10toast: pip install win10toast{Colors.RESET}")
+            return False
+        except Exception as e:
+            # 静默处理所有通知错误
+            return False
+    
+    def _send_macos_notification(self, title, message):
+        """发送macOS通知（使用osascript）"""
+        try:
+            # 构建AppleScript命令
+            # 转义特殊字符
+            message = message.replace('"', '\\"')
+            title = title.replace('"', '\\"')
+            
+            script = f'display notification "{message}" with title "{title}"'
+            
+            import subprocess
+            subprocess.run(['osascript', '-e', script], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        except Exception as e:
+            return False
+    
+    def _send_linux_notification(self, title, message):
+        """发送Linux通知（使用notify-send）"""
+        try:
+            import subprocess
+            duration = self.config.get('notification_duration', 5) * 1000  # 转换为毫秒
+            
+            # 转义特殊字符
+            message = message.replace('"', '\\"')
+            title = title.replace('"', '\\"')
+            
+            # 构建命令
+            cmd = ['notify-send', title, message, '-t', str(duration)]
+            
+            # 添加图标（如果可用且启用）
+            if self.config.get('show_icon', True) and self.icon_path and os.path.exists(self.icon_path):
+                cmd.extend(['-i', self.icon_path])
+            
+            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        except FileNotFoundError:
+            print(f"{Colors.YELLOW}[通知] 需要安装 notify-send (通常在 libnotify-bin 包中){Colors.RESET}")
+            return False
+        except Exception as e:
+            return False
+    
+    def _get_icon_path(self):
+        """获取图标路径"""
+        # 检查是否有Minecraft图标
+        possible_paths = [
+            "minecraft_icon.png",
+            "icon.png",
+            "minecraft_monitor_icon.png",
+            os.path.join(os.path.dirname(__file__), "minecraft_icon.png"),
+            os.path.join(os.path.dirname(__file__), "icon.png"),
+            os.path.join(os.path.dirname(__file__), "minecraft_monitor_icon.png"),
+        ]
+        
+        for path in possible_paths:
+            if os.path.exists(path):
+                return os.path.abspath(path)  # 返回绝对路径
+        
+        # 如果没有找到图标文件，尝试创建默认图标
+        return self._create_default_icon()
+    
+    def _create_default_icon(self):
+        """创建默认图标（简单的Minecraft草方块）"""
+        try:
+            from PIL import Image, ImageDraw
+            
+            icon_path = "minecraft_monitor_icon.png"
+            
+            # 创建64x64的图标
+            img = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(img)
+            
+            # 绘制草方块（绿色和棕色）
+            # 顶部（绿色）
+            draw.rectangle([8, 8, 56, 28], fill=(92, 219, 112))
+            # 侧面（棕色）
+            draw.polygon([(8, 28), (8, 56), (28, 56), (56, 28)], fill=(169, 108, 64))
+            
+            # 保存图标
+            img.save(icon_path, 'PNG')
+            
+            print(f"{Colors.GREEN}[通知] 已创建默认图标: {icon_path}{Colors.RESET}")
+            return os.path.abspath(icon_path)
+        except ImportError:
+            print(f"{Colors.YELLOW}[通知] 需要安装 Pillow 来创建图标: pip install Pillow{Colors.RESET}")
+            return None
+        except Exception as e:
+            print(f"{Colors.YELLOW}[通知] 创建图标失败: {str(e)}{Colors.RESET}")
+            return None
+    
+    def get_notification_title(self, event_type):
+        """根据事件类型获取通知标题"""
+        title_map = {
+            'status_change': '服务器状态变化',
+            'player_join': '玩家加入',
+            'player_leave': '玩家退出',
+            'player_count': '玩家数量变化',
+            'info': '监控信息'
+        }
+        return title_map.get(event_type, '监控通知')
+    
+    def configure_interactive(self):
+        """交互式配置通知设置"""
+        # 保存当前运行状态
+        import os
+        os.system('cls' if os.name == 'nt' else 'clear')
+        
+        print(f"{Colors.BOLD}{Colors.CYAN}通知系统配置{Colors.RESET}")
+        print(f"{Colors.CYAN}当前操作系统: {self.os_type}{Colors.RESET}")
+        print()
+        
+        while True:
+            # 显示当前配置
+            print(f"{Colors.YELLOW}当前配置:{Colors.RESET}")
+            print(f"  1. 启用通知: {Colors.GREEN if self.config['enabled'] else Colors.RED}{self.config['enabled']}{Colors.RESET}")
+            
+            # 显示启用的通知类型
+            enabled_types = []
+            for t in self.NOTIFY_TYPES:
+                if t in self.config['notify_types']:
+                    enabled_types.append(f"{Colors.GREEN}{self.NOTIFY_TYPES[t]}{Colors.RESET}")
+                else:
+                    enabled_types.append(f"{Colors.YELLOW}{self.NOTIFY_TYPES[t]}{Colors.RESET}")
+            print(f"  2. 通知类型: {', '.join(enabled_types)}")
+            
+            print(f"  3. 显示图标: {self.config['show_icon']}")
+            print(f"  4. 通知持续时间: {self.config['notification_duration']}秒")
+            print(f"  5. 最小通知间隔: {self.config['min_notify_interval']}秒")
+            print(f"  6. 抑制玩家频繁变化: {self.config['suppress_player_changes']}")
+            print(f"  7. 发送测试通知")
+            print(f"  8. 保存并返回监控")
+            print(f"  9. 取消并返回监控")
+            
+            choice = input(f"\n{Colors.CYAN}请选择 (1-9): {Colors.RESET}").strip()
+            
+            if choice == '1':
+                self.config['enabled'] = not self.config['enabled']
+                status = "启用" if self.config['enabled'] else "禁用"
+                print(f"{Colors.GREEN}通知已{status}{Colors.RESET}")
+                
+            elif choice == '2':
+                # 配置通知类型
+                self._configure_notify_types()
+                
+            elif choice == '3':
+                self.config['show_icon'] = not self.config['show_icon']
+                # 重新初始化图标
+                if self.config['show_icon']:
+                    self._init_icon()
+                status = "显示" if self.config['show_icon'] else "不显示"
+                print(f"{Colors.GREEN}图标已设置为{status}{Colors.RESET}")
+                
+            elif choice == '4':
+                try:
+                    duration = int(input(f"{Colors.CYAN}请输入通知持续时间(秒, 1-30): {Colors.RESET}"))
+                    if 1 <= duration <= 30:
+                        self.config['notification_duration'] = duration
+                        print(f"{Colors.GREEN}通知持续时间已设置为{duration}秒{Colors.RESET}")
+                    else:
+                        print(f"{Colors.RED}请输入1-30之间的数字{Colors.RESET}")
+                except ValueError:
+                    print(f"{Colors.RED}请输入有效的数字{Colors.RESET}")
+                    
+            elif choice == '5':
+                try:
+                    interval = int(input(f"{Colors.CYAN}请输入最小通知间隔(秒, 5-300): {Colors.RESET}"))
+                    if 5 <= interval <= 300:
+                        self.config['min_notify_interval'] = interval
+                        print(f"{Colors.GREEN}最小通知间隔已设置为{interval}秒{Colors.RESET}")
+                    else:
+                        print(f"{Colors.RED}请输入5-300之间的数字{Colors.RESET}")
+                except ValueError:
+                    print(f"{Colors.RED}请输入有效的数字{Colors.RESET}")
+                    
+            elif choice == '6':
+                self.config['suppress_player_changes'] = not self.config['suppress_player_changes']
+                status = "启用" if self.config['suppress_player_changes'] else "禁用"
+                print(f"{Colors.GREEN}玩家变化抑制已{status}{Colors.RESET}")
+                
+            elif choice == '7':
+                # 发送测试通知
+                title = "测试通知"
+                message = "这是一条测试通知，用于验证通知系统是否正常工作。"
+                if self.send_notification(title, message):
+                    print(f"{Colors.GREEN}测试通知已发送{Colors.RESET}")
+                else:
+                    print(f"{Colors.RED}发送测试通知失败，请检查系统配置{Colors.RESET}")
+                    
+            elif choice == '8':
+                # 保存并返回监控
+                if self.save_config():
+                    print(f"{Colors.GREEN}配置已保存到: {self.config_file}{Colors.RESET}")
+                # 短暂延迟后返回
+                print(f"{Colors.CYAN}返回监控界面...{Colors.RESET}")
+                time.sleep(1)
+                return True
+                
+            elif choice == '9':
+                # 取消并返回监控，不保存配置
+                # 重新加载原始配置
+                self.load_config()
+                # 重新初始化图标
+                self._init_icon()
+                print(f"{Colors.YELLOW}配置未保存，返回监控界面...{Colors.RESET}")
+                time.sleep(1)
+                return False
+                
+            else:
+                print(f"{Colors.RED}无效的选择，请重试{Colors.RESET}")
+            
+            print()
+    
+    def _configure_notify_types(self):
+        """配置通知类型"""
+        print(f"\n{Colors.BOLD}{Colors.CYAN}选择要通知的事件类型:{Colors.RESET}")
+        
+        # 获取当前选择的类型
+        current_types = self.config.get('notify_types', [])
+        current_names = [self.NOTIFY_TYPES[t] for t in current_types]
+        print(f"{Colors.YELLOW}当前选择的类型: {', '.join(current_names) if current_names else '无'}{Colors.RESET}")
+        print()
+        
+        for i, (event_type, display_name) in enumerate(self.NOTIFY_TYPES.items(), 1):
+            is_selected = event_type in current_types
+            checkbox = f"{Colors.GREEN}[✓]{Colors.RESET}" if is_selected else f"{Colors.RED}[ ]{Colors.RESET}"
+            print(f"  {checkbox} {i}. {display_name}")
+        
+        print(f"\n{Colors.YELLOW}输入数字切换选择，多个用逗号分隔，或输入 'all' 选择所有，'none' 清除所有，'done' 完成{Colors.RESET}")
+        
+        while True:
+            choice = input(f"{Colors.CYAN}选择: {Colors.RESET}").strip().lower()
+            
+            if choice == 'done':
+                break
+            elif choice == 'all':
+                self.config['notify_types'] = list(self.NOTIFY_TYPES.keys())
+                print(f"{Colors.GREEN}已选择所有事件类型{Colors.RESET}")
+                break
+            elif choice == 'none':
+                self.config['notify_types'] = []
+                print(f"{Colors.GREEN}已清除所有选择{Colors.RESET}")
+                break
+            else:
+                try:
+                    # 处理多个选择
+                    selections = [s.strip() for s in choice.split(',')]
+                    valid = True
+                    
+                    for sel in selections:
+                        if not sel.isdigit():
+                            valid = False
+                            break
+                        idx = int(sel) - 1
+                        if idx < 0 or idx >= len(self.NOTIFY_TYPES):
+                            valid = False
+                            break
+                    
+                    if valid:
+                        event_types = list(self.NOTIFY_TYPES.keys())
+                        for sel in selections:
+                            idx = int(sel) - 1
+                            event_type = event_types[idx]
+                            
+                            if event_type in self.config['notify_types']:
+                                self.config['notify_types'].remove(event_type)
+                            else:
+                                self.config['notify_types'].append(event_type)
+                        
+                        # 重新显示选择状态
+                        print(f"\n{Colors.GREEN}选择已更新{Colors.RESET}")
+                        selected_names = [self.NOTIFY_TYPES[t] for t in self.config['notify_types']]
+                        print(f"{Colors.YELLOW}当前选择的类型: {', '.join(selected_names) if selected_names else '无'}{Colors.RESET}")
+                        break
+                    else:
+                        print(f"{Colors.RED}请输入有效的数字{Colors.RESET}")
+                except ValueError:
+                    print(f"{Colors.RED}请输入有效的数字{Colors.RESET}")
+
+# 全局通知管理器实例
+_notification_manager = None
+
+def get_notification_manager():
+    """获取通知管理器实例"""
+    global _notification_manager
+    
+    if _notification_manager is None:
+        _notification_manager = NotificationManager()
+        print(f"{Colors.CYAN}[监控] 初始化通知系统 ({_notification_manager.os_type}){Colors.RESET}")
+    
+    return _notification_manager
 
 # ========== 监控事件类 ==========
 class MonitorEvent:
@@ -1281,7 +1810,11 @@ class ServerMonitor:
                 latest_log = log_files[0]
                 print(f"{Colors.CYAN}日志文件: {latest_log['filename']} ({len(log_files)}个文件){Colors.RESET}")
         
-        print(f"{Colors.YELLOW}控制: q 返回 | +/- 调整间隔 | r 手动刷新 | t 切换排序 | l 查看完整日志{Colors.RESET}")
+        # 显示通知状态
+        notification_manager = get_notification_manager()
+        notify_status = f"{Colors.GREEN}开{Colors.RESET}" if notification_manager.is_enabled() else f"{Colors.RED}关{Colors.RESET}"
+        
+        print(f"{Colors.YELLOW}控制: q 返回 | +/- 调整间隔 | r 手动刷新 | t 切换排序 | l 查看完整日志 | n 通知设置({notify_status}){Colors.RESET}")
         print("=" * 80)
         
         # 显示服务器详细信息
@@ -1535,6 +2068,11 @@ class ServerMonitor:
             # 显示完整日志
             self.show_full_log()
             return True  # 返回监控界面
+        elif key == 'n':
+            # 打开通知配置菜单
+            get_notification_manager().configure_interactive()
+            # 返回后强制刷新显示
+            return True  # 立即刷新显示
         else:
             return True  # 继续监控
     
@@ -1627,7 +2165,11 @@ class MultiServerMonitor:
             if total_log_files > 0:
                 print(f"{Colors.CYAN}日志文件: 共 {total_log_files} 个日志文件{Colors.RESET}")
         
-        print(f"{Colors.YELLOW}控制: q 返回 | +/- 调整间隔 | r 手动刷新 | l 查看完整日志 | f 按服务器查看日志{Colors.RESET}")
+        # 显示通知状态
+        notification_manager = get_notification_manager()
+        notify_status = f"{Colors.GREEN}开{Colors.RESET}" if notification_manager.is_enabled() else f"{Colors.RED}关{Colors.RESET}"
+        
+        print(f"{Colors.YELLOW}控制: q 返回 | +/- 调整间隔 | r 手动刷新 | l 查看完整日志 | f 按服务器查看日志 | n 通知设置({notify_status}){Colors.RESET}")
         print("=" * 80)
         
         # 显示所有服务器状态
@@ -1777,6 +2319,11 @@ class MultiServerMonitor:
         elif key == 'f':
             # 显示按服务器分类的日志查看器
             self.show_server_categorized_log()
+            return True
+        elif key == 'n':
+            # 打开通知配置菜单
+            get_notification_manager().configure_interactive()
+            # 返回后强制刷新显示
             return True
         else:
             return True
@@ -2016,9 +2563,49 @@ if __name__ == "__main__":
     parser.add_argument('-e', '--export', action='store_true', help='导出日志')
     parser.add_argument('-c', '--cleanup', action='store_true', help='清理旧日志')
     
+    # 添加通知参数
+    parser.add_argument('--notify', action='store_true', help='启用系统通知')
+    parser.add_argument('--notify-types', type=str, help='通知事件类型，用逗号分隔，如: status_change,player_join')
+    parser.add_argument('--notify-config', action='store_true', help='打开通知配置菜单')
+    
     args = parser.parse_args()
     
     print(f"{Colors.BOLD}{Colors.CYAN}Minecraft服务器监控工具{Colors.RESET}")
+    
+    # 处理通知相关的命令行参数
+    if args.notify or args.notify_types or args.notify_config:
+        notification_manager = get_notification_manager()
+        
+        if args.notify:
+            notification_manager.config['enabled'] = True
+            print(f"{Colors.GREEN}[通知] 已启用系统通知{Colors.RESET}")
+        
+        if args.notify_types:
+            types = [t.strip() for t in args.notify_types.split(',')]
+            valid_types = []
+            for t in types:
+                if t in notification_manager.NOTIFY_TYPES:
+                    valid_types.append(t)
+                else:
+                    print(f"{Colors.YELLOW}[通知] 未知事件类型: {t}{Colors.RESET}")
+            
+            notification_manager.config['notify_types'] = valid_types
+            print(f"{Colors.GREEN}[通知] 已设置通知类型: {', '.join(valid_types)}{Colors.RESET}")
+        
+        if args.notify_config:
+            notification_manager.configure_interactive()
+        
+        # 保存配置
+        notification_manager.save_config()
+        
+        if args.notify or args.notify_types:
+            # 如果是通过命令行启用的，询问是否立即开始监控
+            print(f"\n{Colors.CYAN}通知配置已保存，是否立即开始监控? (Y/n): {Colors.RESET}", end="")
+            response = input().strip().lower()
+            if response in ('', 'y', 'yes'):
+                pass  # 继续执行监控
+            else:
+                sys.exit(0)
     
     # 处理日志相关命令
     if args.log:
@@ -2038,11 +2625,14 @@ if __name__ == "__main__":
         print(f"  2. 查看日志: python server_monitor.py -l")
         print(f"  3. 导出日志: python server_monitor.py -e")
         print(f"  4. 清理日志: python server_monitor.py -c")
+        print(f"  5. 启用通知: python server_monitor.py --notify")
+        print(f"  6. 配置通知: python server_monitor.py --notify-config")
         print()
         print(f"{Colors.CYAN}示例:{Colors.RESET}")
         print(f"  python server_monitor.py 1 2 3")
         print(f"  python server_monitor.py mc.hypixel.net:25565")
         print(f"  python server_monitor.py -l")
+        print(f"  python server_monitor.py --notify --notify-types=status_change,player_join")
         sys.exit(0)
     
     print(f"{Colors.CYAN}参数: {args}{Colors.RESET}")

@@ -13,3 +13,5 @@
 # mcstatus==11.1.0  # Minecraft服务器状态查询库（备选）
 
 # 当前无额外依赖
+
+win10toast ==0.9  # Windows通知支持

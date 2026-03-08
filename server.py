@@ -98,12 +98,134 @@ def query_and_cache_mods(host: str, port: int, username: str, mods_hint=None) ->
     save_mods(host, port, mods)
     return mods
 
+class DNSUtils:
+    """DNS解析工具类，包含SRV记录解析功能"""
+    
+    @staticmethod
+    def resolve_srv_record(hostname):
+        """
+        解析Minecraft SRV记录
+        格式：_minecraft._tcp.example.com
+        返回：(实际主机名, 实际端口) 或 None
+        """
+        try:
+            # 尝试使用socket.getaddrinfo (适用于大多数系统)
+            import socket
+            # 尝试A记录解析
+            try:
+                socket.getaddrinfo(hostname, None)
+                # 如果能解析A记录，直接返回None（没有SRV记录）
+                return None
+            except socket.gaierror:
+                # A记录解析失败，尝试构造SRV记录查询
+                pass
+                
+            # 方法1: 使用dnspython库（如果可用）
+            try:
+                import dns.resolver
+                srv_hostname = f"_minecraft._tcp.{hostname}"
+                try:
+                    answers = dns.resolver.resolve(srv_hostname, 'SRV')
+                    if answers:
+                        # 取第一个SRV记录（通常只有一个）
+                        srv_record = answers[0]
+                        target_host = str(srv_record.target).rstrip('.')
+                        port = srv_record.port
+                        print(f"{Colors.CYAN}[DNS] 发现SRV记录: {target_host}:{port}{Colors.RESET}")
+                        return target_host, port
+                except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
+                    pass
+            except ImportError:
+                # dnspython不可用，尝试其他方法
+                pass
+                
+            # 方法2: 使用系统命令（跨平台）
+            import subprocess
+            import platform
+            
+            srv_hostname = f"_minecraft._tcp.{hostname}"
+            
+            if platform.system() == 'Windows':
+                # Windows使用nslookup
+                try:
+                    result = subprocess.run(['nslookup', '-type=SRV', srv_hostname], 
+                                          capture_output=True, text=True, timeout=5)
+                    if result.returncode == 0:
+                        # 解析nslookup输出
+                        lines = result.stdout.split('\n')
+                        for line in lines:
+                            if 'svr hostname' in line.lower() or '=' in line:
+                                parts = line.split('=')
+                                if len(parts) >= 2:
+                                    target_info = parts[1].strip().split()
+                                    if len(target_info) >= 4:
+                                        priority = int(target_info[0])
+                                        weight = int(target_info[1])
+                                        port = int(target_info[2])
+                                        target_host = target_info[3].rstrip('.')
+                                        print(f"{Colors.CYAN}[DNS] 发现SRV记录: {target_host}:{port}{Colors.RESET}")
+                                        return target_host, port
+                except:
+                    pass
+            else:
+                # Linux/Mac使用dig
+                try:
+                    result = subprocess.run(['dig', '+short', 'SRV', srv_hostname], 
+                                          capture_output=True, text=True, timeout=5)
+                    if result.returncode == 0 and result.stdout.strip():
+                        lines = result.stdout.strip().split('\n')
+                        for line in lines:
+                            parts = line.split()
+                            if len(parts) >= 4:
+                                priority = int(parts[0])
+                                weight = int(parts[1])
+                                port = int(parts[2])
+                                target_host = parts[3].rstrip('.')
+                                print(f"{Colors.CYAN}[DNS] 发现SRV记录: {target_host}:{port}{Colors.RESET}")
+                                return target_host, port
+                except:
+                    pass
+                    
+        except Exception as e:
+            print(f"{Colors.YELLOW}[DNS] SRV记录解析失败: {str(e)}{Colors.RESET}")
+            
+        return None
+    
+    @staticmethod
+    def resolve_with_fallback(original_host, original_port=25565, timeout=3):
+        """
+        智能解析主机名，优先尝试SRV记录，失败则使用原始地址
+        返回：(解析后的主机名, 解析后的端口, 是否使用了SRV记录)
+        """
+        try:
+            # 先尝试SRV记录解析
+            srv_result = DNSUtils.resolve_srv_record(original_host)
+            if srv_result:
+                resolved_host, resolved_port = srv_result
+                return resolved_host, resolved_port, True
+                
+            # SRV记录不存在，尝试直接A记录解析
+            import socket
+            socket.getaddrinfo(original_host, original_port)
+            return original_host, original_port, False
+            
+        except socket.gaierror as e:
+            # DNS解析失败
+            raise Exception(f"DNS解析失败: {original_host}: {str(e)}")
+        except Exception as e:
+            # 其他异常
+            raise Exception(f"解析失败: {original_host}:{original_port}: {str(e)}")
+
 class MinecraftPing:
-    """改进的MC服务器ping实现，支持Java版和基岩版"""
+    """改进的MC服务器ping实现，支持Java版和基岩版，包含SRV记录解析"""
 
     # 缓存结果（服务器地址 -> (结果, 过期时间)）
     cache = {}
     CACHE_DURATION = 60  # 缓存时间（秒）
+    
+    # SRV记录缓存
+    srv_cache = {}
+    SRV_CACHE_DURATION = 300  # SRV记录缓存5分钟
 
     @staticmethod
     def detect_server_type(host, port=25565, timeout=3):
@@ -138,28 +260,91 @@ class MinecraftPing:
         if global_cancel_query:
             return {"error": "查询已取消", "connect_time": 0, "query_time": 0}
 
-        # 检查缓存
-        cache_key = f"{host}:{port}:{server_type}"
+        # 检查SRV记录缓存
+        srv_cache_key = f"srv:{host}"
+        resolved_host = host
+        resolved_port = port
+        used_srv = False
+        
+        if srv_cache_key in MinecraftPing.srv_cache:
+            cached_srv, srv_expiry = MinecraftPing.srv_cache[srv_cache_key]
+            if time.time() < srv_expiry:
+                resolved_host, resolved_port = cached_srv
+                used_srv = True
+                print(f"{Colors.CYAN}[DNS] 使用缓存的SRV记录: {resolved_host}:{resolved_port}{Colors.RESET}")
+        
+        # 如果没有缓存的SRV记录，尝试解析
+        if not used_srv:
+            try:
+                srv_result = DNSUtils.resolve_srv_record(host)
+                if srv_result:
+                    resolved_host, resolved_port = srv_result
+                    used_srv = True
+                    # 缓存SRV记录
+                    MinecraftPing.srv_cache[srv_cache_key] = (
+                        (resolved_host, resolved_port), 
+                        time.time() + MinecraftPing.SRV_CACHE_DURATION
+                    )
+            except Exception as e:
+                print(f"{Colors.YELLOW}[DNS] SRV记录解析失败，使用原始地址: {str(e)}{Colors.RESET}")
+
+        # 更新缓存键以包含解析后的地址
+        cache_key = f"{resolved_host}:{resolved_port}:{server_type}"
         if use_cache and cache_key in MinecraftPing.cache:
             cached_data, expiry = MinecraftPing.cache[cache_key]
             if time.time() < expiry:
+                # 添加SRV记录信息
+                if used_srv:
+                    cached_data['srv_info'] = {
+                        'original_host': host,
+                        'original_port': port,
+                        'resolved_host': resolved_host,
+                        'resolved_port': resolved_port
+                    }
                 return cached_data
 
         try:
             # 根据服务器类型选择ping方法
             if server_type == "bedrock":
-                result = MinecraftPing.ping_bedrock(host, port, timeout)
+                result = MinecraftPing.ping_bedrock(resolved_host, resolved_port, timeout)
             else:  # 默认为Java版
-                result = MinecraftPing.ping_java(host, port, timeout)
+                result = MinecraftPing.ping_java(resolved_host, resolved_port, timeout)
 
             # 添加查询时间戳
             result['query_timestamp'] = time.time()
+            
+            # 添加SRV记录信息（如果使用了SRV记录）
+            if used_srv:
+                result['srv_info'] = {
+                    'original_host': host,
+                    'original_port': port,
+                    'resolved_host': resolved_host,
+                    'resolved_port': resolved_port
+                }
+                result['original_address'] = f"{host}:{port}"
+                result['resolved_address'] = f"{resolved_host}:{resolved_port}"
 
             # 更新缓存
             MinecraftPing.cache[cache_key] = (result, time.time() + MinecraftPing.CACHE_DURATION)
 
             return result
         except Exception as e:
+            # 如果使用了SRV记录但失败，尝试回退到原始地址
+            if used_srv:
+                print(f"{Colors.YELLOW}[DNS] SRV记录查询失败，尝试回退到原始地址: {host}:{port}{Colors.RESET}")
+                try:
+                    if server_type == "bedrock":
+                        result = MinecraftPing.ping_bedrock(host, port, timeout)
+                    else:
+                        result = MinecraftPing.ping_java(host, port, timeout)
+                    
+                    if 'error' not in result:
+                        result['query_timestamp'] = time.time()
+                        result['srv_fallback'] = True
+                        return result
+                except Exception as e2:
+                    pass
+                    
             return {"error": str(e), "connect_time": 0, "query_time": 0, "motd": "", "server_type": server_type}
 
     @staticmethod
@@ -171,6 +356,9 @@ class MinecraftPing:
             # 解析主机名
             try:
                 ip = socket.getaddrinfo(host, port, socket.AF_INET)[0][4][0]
+            except socket.gaierror:
+                # 如果getaddrinfo失败，尝试直接使用主机名
+                ip = host
             except:
                 ip = host
 
@@ -1072,6 +1260,11 @@ class ServerManager:
 
             print(f"\n{index_color}[{self.current_page * self.page_size + i + 1}]{Colors.RESET} {Colors.BOLD}{server['name']}{type_display}{Colors.RESET}")
             print(f"{Colors.BLUE}地址:{Colors.RESET} {server['ip']}:{server.get('port', 25565 if server_type == 'java' else 19132)}")
+            
+            # 显示SRV解析信息
+            if 'srv_info' in result:
+                srv_info = result['srv_info']
+                print(f"{Colors.CYAN}SRV解析:{Colors.RESET} {srv_info['original_host']}:{srv_info['original_port']} → {srv_info['resolved_host']}:{srv_info['resolved_port']}")
 
             if 'note' in server and server['note']:
                 print(f"{Colors.YELLOW}备注:{Colors.RESET} {server['note']}")
@@ -1711,6 +1904,7 @@ def main():
             print(f"{Colors.GREEN}刷新当前页...{Colors.RESET}")
             # 清除缓存
             MinecraftPing.cache.clear()
+            MinecraftPing.srv_cache.clear()
         elif cmd == 'o':  # 排序
             print(f"{Colors.CYAN}可用排序字段: name, ip, port, type{Colors.RESET}")
             field = input("排序字段: ").strip().lower()

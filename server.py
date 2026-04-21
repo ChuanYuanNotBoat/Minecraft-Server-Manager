@@ -22,6 +22,10 @@ from msm.constants import (
     Colors,
 )
 from msm.help_text import print_help as print_common_help
+from msm.dns_utils import DNSUtils
+from msm.json_store import load_json_file, save_json_file
+from msm.cli.index_parser import parse_multi_server_indices, parse_single_server_index
+from msm.cli.scan_workflow import run_scan_workflow
 
 # 全局变量
 global_cancel_query = False
@@ -48,94 +52,6 @@ try:
 except ImportError:
     SERVER_INFO_AVAILABLE = False
     print(f"{Colors.YELLOW}警告: 未找到server_info模块，详细查询功能将受限{Colors.RESET}")
-
-# === DNS 工具类 ===
-class DNSUtils:
-    """DNS解析工具类，包含SRV记录解析功能"""
-    
-    @staticmethod
-    def resolve_srv_record(hostname):
-        """解析Minecraft SRV记录"""
-        try:
-            # 方法1: 使用dnspython库（如果可用）
-            try:
-                import dns.resolver
-                srv_hostname = f"_minecraft._tcp.{hostname}"
-                try:
-                    answers = dns.resolver.resolve(srv_hostname, 'SRV')
-                    if answers:
-                        srv_record = answers[0]
-                        target_host = str(srv_record.target).rstrip('.')
-                        port = srv_record.port
-                        print(f"{Colors.CYAN}[DNS] 发现SRV记录: {target_host}:{port}{Colors.RESET}")
-                        return target_host, port
-                except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
-                    pass
-            except ImportError:
-                pass
-                
-            # 方法2: 使用系统命令
-            import subprocess
-            import platform
-            
-            srv_hostname = f"_minecraft._tcp.{hostname}"
-            
-            if platform.system() == 'Windows':
-                try:
-                    result = subprocess.run(['nslookup', '-type=SRV', srv_hostname], 
-                                          capture_output=True, text=True, timeout=5)
-                    if result.returncode == 0:
-                        lines = result.stdout.split('\n')
-                        for line in lines:
-                            if 'svr hostname' in line.lower() or '=' in line:
-                                parts = line.split('=')
-                                if len(parts) >= 2:
-                                    target_info = parts[1].strip().split()
-                                    if len(target_info) >= 4:
-                                        port = int(target_info[2])
-                                        target_host = target_info[3].rstrip('.')
-                                        print(f"{Colors.CYAN}[DNS] 发现SRV记录: {target_host}:{port}{Colors.RESET}")
-                                        return target_host, port
-                except:
-                    pass
-            else:
-                try:
-                    result = subprocess.run(['dig', '+short', 'SRV', srv_hostname], 
-                                          capture_output=True, text=True, timeout=5)
-                    if result.returncode == 0 and result.stdout.strip():
-                        lines = result.stdout.strip().split('\n')
-                        for line in lines:
-                            parts = line.split()
-                            if len(parts) >= 4:
-                                port = int(parts[2])
-                                target_host = parts[3].rstrip('.')
-                                print(f"{Colors.CYAN}[DNS] 发现SRV记录: {target_host}:{port}{Colors.RESET}")
-                                return target_host, port
-                except:
-                    pass
-                    
-        except Exception as e:
-            print(f"{Colors.YELLOW}[DNS] SRV记录解析失败: {str(e)}{Colors.RESET}")
-            
-        return None
-    
-    @staticmethod
-    def resolve_with_fallback(original_host, original_port=25565, timeout=3):
-        """智能解析主机名"""
-        try:
-            srv_result = DNSUtils.resolve_srv_record(original_host)
-            if srv_result:
-                resolved_host, resolved_port = srv_result
-                return resolved_host, resolved_port, True
-                
-            import socket
-            socket.getaddrinfo(original_host, original_port)
-            return original_host, original_port, False
-            
-        except socket.gaierror as e:
-            raise Exception(f"DNS解析失败: {original_host}: {str(e)}")
-        except Exception as e:
-            raise Exception(f"解析失败: {original_host}:{original_port}: {str(e)}")
 
 # === Minecraft Ping 类 ===
 class MinecraftPing:
@@ -569,28 +485,22 @@ class ServerManager:
 
     def load_page_size(self):
         """从配置文件加载每页显示数量"""
-        if os.path.exists(CONFIG_FILE):
-            try:
-                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-                    return config.get('page_size', 10)
-            except Exception:
-                pass
+        config = load_json_file(CONFIG_FILE, default=None)
+        if isinstance(config, dict):
+            return config.get('page_size', 10)
         return None
 
     def save_page_size(self):
         """保存每页显示数量到配置文件"""
         try:
-            if os.path.exists(CONFIG_FILE):
-                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-            else:
+            config = load_json_file(CONFIG_FILE, default={})
+            if not isinstance(config, dict):
                 config = {}
             
             config['page_size'] = self.page_size
             
-            with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-                json.dump(config, f, indent=2, ensure_ascii=False)
+            if not save_json_file(CONFIG_FILE, config, ensure_ascii=False, indent=2):
+                raise Exception("写入配置文件失败")
             
             print(f"{Colors.GREEN}已保存页面设置: 每页 {self.page_size} 个服务器{Colors.RESET}")
             return True
@@ -600,25 +510,27 @@ class ServerManager:
 
     def load_servers(self):
         """从JSON文件加载服务器列表"""
-        if os.path.exists(JSON_FILE):
-            try:
-                with open(JSON_FILE, 'r', encoding='utf-8') as f:
-                    self.servers = json.load(f)
-
-                # 向后兼容性处理
-                for server in self.servers:
-                    server.setdefault('type', SERVER_TYPE_JAVA)
-                    server.setdefault('last_query', 0)
-                    server.setdefault('query_history', deque(maxlen=10))
-                    server.setdefault('player_history', deque(maxlen=10))
-
-                print(f"{Colors.CYAN}已加载 {len(self.servers)} 个服务器{Colors.RESET}")
-            except Exception as e:
-                print(f"{Colors.RED}加载服务器列表失败: {str(e)}{Colors.RESET}")
-                self.servers = []
-        else:
+        loaded_servers = load_json_file(JSON_FILE, default=None)
+        if loaded_servers is None:
             print(f"{Colors.YELLOW}未找到服务器列表，将创建新文件{Colors.RESET}")
             self.servers = []
+            return
+
+        if not isinstance(loaded_servers, list):
+            print(f"{Colors.RED}加载服务器列表失败: 文件格式不正确（需要list）{Colors.RESET}")
+            self.servers = []
+            return
+
+        self.servers = loaded_servers
+
+        # 向后兼容性处理
+        for server in self.servers:
+            server.setdefault('type', SERVER_TYPE_JAVA)
+            server.setdefault('last_query', 0)
+            server.setdefault('query_history', deque(maxlen=10))
+            server.setdefault('player_history', deque(maxlen=10))
+
+        print(f"{Colors.CYAN}已加载 {len(self.servers)} 个服务器{Colors.RESET}")
 
     def save_servers(self):
         """保存服务器列表到JSON文件"""
@@ -629,8 +541,8 @@ class ServerManager:
                     if key in server and isinstance(server[key], deque):
                         server[key] = list(server[key])
 
-            with open(JSON_FILE, 'w', encoding='utf-8') as f:
-                json.dump(self.servers, f, indent=2, ensure_ascii=False)
+            if not save_json_file(JSON_FILE, self.servers, ensure_ascii=False, indent=2):
+                raise Exception("写入服务器文件失败")
 
             # 恢复deque结构
             for server in self.servers:
@@ -1755,154 +1667,44 @@ def main():
                     print(f"{Colors.RED}无效的筛选类型{Colors.RESET}")
             except (KeyboardInterrupt, EOFError):
                 print(f"\n{Colors.YELLOW}操作取消{Colors.RESET}")
-        elif cmd.startswith('players '):  # 查看玩家列表
+
+        elif cmd.startswith('players '):  # players list
+            parts = cmd.split()
+            actual_index = parse_single_server_index(parts, manager, Colors)
+            if actual_index is not None:
+                manager.show_players(actual_index)
+        elif cmd.startswith('info '):  # server details
+            parts = cmd.split()
+            actual_index = parse_single_server_index(parts, manager, Colors)
+            if actual_index is not None:
+                manager.show_server_info(actual_index)
+        elif cmd.startswith('monitor '):  # monitor servers
             try:
                 parts = cmd.split()
                 if len(parts) < 2:
-                    print(f"{Colors.RED}请指定服务器序号{Colors.RESET}")
+                    print(f"{Colors.RED}Please specify server index{Colors.RESET}")
                     continue
 
-                index = int(parts[1]) - 1
-                actual_index = manager.current_page * manager.page_size + index
-
-                if 0 <= actual_index < len(manager.servers):
-                    manager.show_players(actual_index)
-                else:
-                    print(f"{Colors.RED}无效的服务器序号{Colors.RESET}")
-            except ValueError:
-                print(f"{Colors.RED}请输入有效的服务器序号{Colors.RESET}")
-        elif cmd.startswith('info '):  # 查看服务器详细信息
-            try:
-                parts = cmd.split()
-                if len(parts) < 2:
-                    print(f"{Colors.RED}请指定服务器序号{Colors.RESET}")
-                    continue
-
-                index = int(parts[1]) - 1
-                actual_index = manager.current_page * manager.page_size + index
-
-                if 0 <= actual_index < len(manager.servers):
-                    manager.show_server_info(actual_index)
-                else:
-                    print(f"{Colors.RED}无效的服务器序号{Colors.RESET}")
-            except ValueError:
-                print(f"{Colors.RED}请输入有效的服务器序号{Colors.RESET}")
-        elif cmd.startswith('monitor '):  # 监控服务器状态
-            try:
-                parts = cmd.split()
-                if len(parts) < 2:
-                    print(f"{Colors.RED}请指定服务器序号{Colors.RESET}")
-                    continue
-                
-                # 检查是否是 "all" 命令
+                # Support `monitor all`
                 if parts[1].lower() == 'all':
-                    # 监控所有服务器
                     from server_monitor import monitor_all_servers
                     if monitor_all_servers(manager):
-                        print(f"{Colors.GREEN}已开始监控所有服务器{Colors.RESET}")
+                        print(f"{Colors.GREEN}Started monitoring all servers{Colors.RESET}")
                     continue
-                
-                # 解析所有服务器序号
-                indices = []
-                for part in parts[1:]:
-                    try:
-                        # 计算实际索引（考虑分页）
-                        index = int(part) - 1
-                        actual_index = manager.current_page * manager.page_size + index
-                        
-                        if 0 <= actual_index < len(manager.servers):
-                            indices.append(actual_index)
-                        else:
-                            print(f"{Colors.RED}无效的服务器序号: {part}{Colors.RESET}")
-                            break
-                    except ValueError:
-                        print(f"{Colors.RED}无效的服务器序号: {part}{Colors.RESET}")
-                        break
-                
-                # 如果所有序号都有效，启动监控
+
+                indices = parse_multi_server_indices(parts, manager, Colors)
                 if indices:
                     from server_monitor import monitor_multiple_servers
                     if monitor_multiple_servers(manager, indices):
-                        print(f"{Colors.GREEN}已开始监控 {len(indices)} 个服务器{Colors.RESET}")
+                        print(f"{Colors.GREEN}Started monitoring {len(indices)} server(s){Colors.RESET}")
                 else:
-                    print(f"{Colors.RED}未指定有效的服务器序号{Colors.RESET}")
+                    print(f"{Colors.RED}No valid server index provided{Colors.RESET}")
             except Exception as e:
-                print(f"{Colors.RED}监控启动失败: {str(e)}{Colors.RESET}")
-        elif cmd == 'scan':  # 扫描端口
-            try:
-                host = input("输入要扫描的IP地址或域名: ").strip()
-                if not host:
-                    print(f"{Colors.RED}IP地址不能为空!{Colors.RESET}")
-                    continue
-
-                # 扫描端口
-                found_servers = manager.scan_ports(host)
-
-                # 显示扫描结果并让用户选择
-                selected_server = manager.display_scan_results(host, found_servers)
-
-                if selected_server:
-                    # 让用户输入服务器名称
-                    name = input("服务器名称: ").strip()
-                    if not name:
-                        # 使用默认名称
-                        name = f"{host}:{selected_server['port']}"
-
-                    note = input("备注 (可选): ").strip()
-
-                    # 添加服务器
-                    manager.add_server({
-                        'name': name,
-                        'ip': host,
-                        'port': selected_server['port'],
-                        'type': selected_server['type'],
-                        'note': note if note else ""
-                    })
-            except KeyboardInterrupt:
-                print(f"\n{Colors.YELLOW}操作取消{Colors.RESET}")
-            except EOFError:
-                print(f"\n{Colors.YELLOW}操作取消{Colors.RESET}")
-        elif cmd == 'scanall':  # 扫描所有端口
-            try:
-                host = input("输入要扫描的IP地址或域名: ").strip()
-                if not host:
-                    print(f"{Colors.RED}IP地址不能为空!{Colors.RESET}")
-                    continue
-
-                # 确认扫描所有端口
-                print(f"{Colors.YELLOW}警告: 扫描所有端口 (1-65535) 可能需要很长时间!{Colors.RESET}")
-                confirm = input("是否继续? (y/N): ").strip().lower()
-                if confirm != 'y':
-                    print(f"{Colors.YELLOW}操作取消{Colors.RESET}")
-                    continue
-
-                # 扫描所有端口
-                found_servers = manager.scan_all_ports(host)
-
-                # 显示扫描结果并让用户选择
-                selected_server = manager.display_scan_results(host, found_servers)
-
-                if selected_server:
-                    # 让用户输入服务器名称
-                    name = input("服务器名称: ").strip()
-                    if not name:
-                        # 使用默认名称
-                        name = f"{host}:{selected_server['port']}"
-
-                    note = input("备注 (可选): ").strip()
-
-                    # 添加服务器
-                    manager.add_server({
-                        'name': name,
-                        'ip': host,
-                        'port': selected_server['port'],
-                        'type': selected_server['type'],
-                        'note': note if note else ""
-                    })
-            except KeyboardInterrupt:
-                print(f"\n{Colors.YELLOW}操作取消{Colors.RESET}")
-            except EOFError:
-                print(f"\n{Colors.YELLOW}操作取消{Colors.RESET}")
+                print(f"{Colors.RED}Failed to start monitor: {str(e)}{Colors.RESET}")
+        elif cmd == 'scan':  # scan ports
+            run_scan_workflow(manager, Colors, scan_all=False)
+        elif cmd == 'scanall':  # scan all ports
+            run_scan_workflow(manager, Colors, scan_all=True)
         elif cmd in ['h', 'help']:  # 帮助
             print_help(manager)
         elif cmd == 'q':  # 退出

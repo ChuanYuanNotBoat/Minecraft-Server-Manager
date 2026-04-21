@@ -98,7 +98,11 @@ Minecraft-Server-Manager/
 ├── msm/               # 公共模块（常量、命令别名、帮助文本）
 │   ├── constants.py
 │   ├── command_aliases.py
-│   └── help_text.py
+│   ├── help_text.py
+│   ├── dns_utils.py
+│   ├── json_store.py
+│   └── cli/
+│       └── index_parser.py
 ├── servers.json       # 服务器列表数据（自动生成）
 ├── config.json        # 配置文件（自动生成）
 ├── requirements.txt   # Python依赖项

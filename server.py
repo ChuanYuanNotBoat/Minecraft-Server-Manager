@@ -24,11 +24,9 @@ from msm.constants import (
 from msm.help_text import print_help as print_common_help
 from msm.dns_utils import DNSUtils
 from msm.json_store import load_json_file, save_json_file
-from msm.cli.pagination_workflow import change_page_size, go_next_page, go_prev_page, go_to_page
-from msm.cli.list_workflow import clear_all_cache, filter_servers, refresh_current_page, save_servers, sort_servers
+from msm.cli.exact_command_dispatcher import dispatch_exact_command
 from msm.cli.monitor_workflow import run_monitor_workflow
 from msm.cli.query_workflow import run_info_workflow, run_players_workflow
-from msm.cli.scan_workflow import run_scan_workflow
 from msm.cli.server_crud_workflow import add_server_interactive, delete_server_interactive, update_server_interactive
 
 # 全局变量
@@ -1476,13 +1474,13 @@ def main():
         if not cmd:
             continue
 
-        if cmd == 'n':  # 下一页
-            go_next_page(manager, Colors)
-        elif cmd == 'p':  # 上一页
-            go_prev_page(manager, Colors)
-        elif cmd == 'g':  # 跳转到指定页
-            go_to_page(manager, Colors)
-        elif cmd == 'a':  # 添加服务器
+        exact_result = dispatch_exact_command(cmd, manager, Colors, MinecraftPing, print_help)
+        if exact_result == "exit":
+            break
+        if exact_result:
+            continue
+
+        if cmd == 'a':  # 添加服务器
             add_server_interactive(
                 manager,
                 Colors,
@@ -1494,34 +1492,12 @@ def main():
             delete_server_interactive(manager, Colors)
         elif cmd == 'u':  # 更新服务器
             update_server_interactive(manager, Colors)
-        elif cmd == 's':  # 保存
-            save_servers(manager, Colors)
-        elif cmd == 'r':  # 刷新
-            refresh_current_page(MinecraftPing, Colors)
-        elif cmd == 'clear':  # 强制清除所有缓存
-            clear_all_cache(MinecraftPing, Colors)
-        elif cmd == 'o':  # 排序
-            sort_servers(manager, Colors)
-        elif cmd == 'c':  # 更改每页数量
-            change_page_size(manager, Colors)
-        elif cmd == 'f':  # 筛选服务器类型
-            filter_servers(manager, Colors)
-
         elif cmd.startswith('players '):  # players list
             run_players_workflow(cmd.split(), manager, Colors)
         elif cmd.startswith('info '):  # server details
             run_info_workflow(cmd.split(), manager, Colors)
         elif cmd.startswith('monitor '):  # monitor servers
             run_monitor_workflow(cmd.split(), manager, Colors)
-        elif cmd == 'scan':  # scan ports
-            run_scan_workflow(manager, Colors, scan_all=False)
-        elif cmd == 'scanall':  # scan all ports
-            run_scan_workflow(manager, Colors, scan_all=True)
-        elif cmd in ['h', 'help']:  # 帮助
-            print_help(manager)
-        elif cmd == 'q':  # 退出
-            print(f"{Colors.GREEN}再见!{Colors.RESET}")
-            break
         else:
             print(f"{Colors.RED}未知命令 (输入'h'查看帮助){Colors.RESET}")
 

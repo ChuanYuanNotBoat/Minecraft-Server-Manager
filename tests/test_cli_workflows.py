@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from msm.cli import index_parser
+from msm.cli import exact_command_dispatcher
 from msm.cli import list_workflow
 from msm.cli import monitor_workflow
 from msm.cli import pagination_workflow
@@ -204,6 +205,25 @@ class TestServerCrudWorkflow(unittest.TestCase):
         with patch("builtins.input", return_value="2"):
             server_crud_workflow.delete_server_interactive(m, FakeColors)
         self.assertEqual(m.deleted_index, 1)
+
+
+class TestExactCommandDispatcher(unittest.TestCase):
+    def test_dispatch_next_page(self):
+        m = FakeManager()
+        with patch("msm.cli.exact_command_dispatcher.go_next_page") as mocked:
+            result = exact_command_dispatcher.dispatch_exact_command("n", m, FakeColors, FakePing, lambda _: None)
+        self.assertTrue(result)
+        mocked.assert_called_once_with(m, FakeColors)
+
+    def test_dispatch_quit_returns_exit(self):
+        m = FakeManager()
+        result = exact_command_dispatcher.dispatch_exact_command("q", m, FakeColors, FakePing, lambda _: None)
+        self.assertEqual(result, "exit")
+
+    def test_dispatch_unknown_returns_false(self):
+        m = FakeManager()
+        result = exact_command_dispatcher.dispatch_exact_command("unknown", m, FakeColors, FakePing, lambda _: None)
+        self.assertFalse(result)
 
 
 if __name__ == "__main__":

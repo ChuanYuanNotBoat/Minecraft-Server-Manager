@@ -9,7 +9,6 @@
 - ✅ 美观输出：带颜色的终端输出，支持 Minecraft 格式代码解析
 - ✅ 服务器管理：添加、删除、编辑服务器信息
 - ✅ 智能扫描：端口扫描功能，自动发现 Minecraft 服务器，支持常用端口和全端口批量扫描
-- ✅ Mod 列表探测与缓存：自动探测 Forge/FML 服务器的 Mod 列表并本地缓存，支持手动配置
 - ✅ 实时监控：服务器状态变化监控、玩家加入/退出事件检测、多服务器同时监控
 - ✅ 日志查看器：类似文本编辑器的日志界面，支持滚动、搜索、按服务器过滤和导出功能
 - ✅ 历史统计：自动记录服务器延迟、玩家数量等历史数据，支持趋势分析
@@ -57,19 +56,26 @@ python -c "from server import MinecraftPing; print(MinecraftPing.ping('server.ad
 
 在管理器中可使用以下命令：
 
-- `n` - 下一页
-- `p` - 上一页
-- `a` - 添加服务器
-- `d` - 删除服务器
-- `players <序号>` - 查看玩家列表
-- `info <序号>` - 查看服务器详情
-- `monitor <序号>` - 监控单个服务器状态变化
-- `monitor <序号1> <序号2> ...` - 同时监控多个服务器
-- `chat <序号>` - 连接到服务器聊天（实验性功能）
-- `scan` - 扫描服务器常用端口
-- `scanall` - 扫描所有端口 (1-65535)
-- `h` - 显示帮助
-- `q` - 退出
+- `n` / `next` - ???
+- `p` / `prev` - ???
+- `g` / `goto` - ??????
+- `a` / `add` - ?????
+- `d` / `delete` - ?????
+- `u` / `update` - ???????
+- `s` / `save` - ???????
+- `r` / `refresh` - ?????
+- `clear` / `clearcache` - ????????
+- `o` / `sort` - ?????
+- `c` / `pagesize` - ????????
+- `f` / `filter` - ???????
+- `players <??>` / `player <??>` - ??????
+- `info <??>` / `detail <??>` - ???????
+- `monitor <??>` / `mon <??>` - ???????????
+- `monitor <??1> <??2> ...` / `mon <??1> <??2> ...` - ?????????
+- `scan` / `scancommon` - ?????????
+- `scanall` / `scanfull` - ?????? (1-65535)
+- `h` / `help` - ????
+- `q` / `quit` - ??
 
 ### 监控功能说明
 
@@ -91,7 +97,6 @@ Minecraft-Server-Manager/
 ├── server_info.py     # 服务器查询核心模块（可选）
 ├── servers.json       # 服务器列表数据（自动生成）
 ├── config.json        # 配置文件（自动生成）
-├── mods_config/       # Mod配置缓存目录
 ├── requirements.txt   # Python依赖项
 └── README.md          # 项目说明
 ```

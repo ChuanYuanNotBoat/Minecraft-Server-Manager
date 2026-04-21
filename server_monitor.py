@@ -1,3 +1,6 @@
+# Minecraft-Server-Manager/server_monitor.py
+# -*- coding: utf-8 -*-
+
 """
 server_monitor.py - Minecraft服务器监控模块
 提供服务器状态监控、事件记录和日志查看功能
@@ -2556,17 +2559,17 @@ if __name__ == "__main__":
     # 独立运行支持
     parser = argparse.ArgumentParser(description='Minecraft服务器监控工具')
     parser.add_argument('servers', nargs='*', help='服务器地址格式: 1) 服务器序号 2) IP:端口 3) IP:端口:类型')
-    parser.add_argument('-i', '--interval', type=int, default=30, help='刷新间隔（秒）')
-    parser.add_argument('-j', '--json', type=str, help='使用JSON配置文件')
-    parser.add_argument('-t', '--type', choices=['java', 'bedrock'], default='java', help='服务器类型（当使用IP:端口时）')
-    parser.add_argument('-l', '--log', action='store_true', help='查看日志')
-    parser.add_argument('-e', '--export', action='store_true', help='导出日志')
-    parser.add_argument('-c', '--cleanup', action='store_true', help='清理旧日志')
+    _ = parser.add_argument('-i', '--interval', type=int, default=30, help='刷新间隔（秒）')
+    _ = parser.add_argument('-j', '--json', type=str, help='使用JSON配置文件')
+    _ = parser.add_argument('-t', '--type', choices=['java', 'bedrock'], default='java', help='服务器类型（当使用IP:端口时）')
+    _ = parser.add_argument('-l', '--log', action='store_true', help='查看日志')
+    _ = parser.add_argument('-e', '--export', action='store_true', help='导出日志')
+    _ = parser.add_argument('-c', '--cleanup', action='store_true', help='清理旧日志')
     
     # 添加通知参数
-    parser.add_argument('--notify', action='store_true', help='启用系统通知')
-    parser.add_argument('--notify-types', type=str, help='通知事件类型，用逗号分隔，如: status_change,player_join')
-    parser.add_argument('--notify-config', action='store_true', help='打开通知配置菜单')
+    _ = parser.add_argument('--notify', action='store_true', help='启用系统通知')
+    _ = parser.add_argument('--notify-types', type=str, help='通知事件类型，用逗号分隔，如: status_change,player_join')
+    _ = parser.add_argument('--notify-config', action='store_true', help='打开通知配置菜单')
     
     args = parser.parse_args()
     

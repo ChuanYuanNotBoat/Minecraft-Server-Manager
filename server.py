@@ -11,13 +11,11 @@ import re
 from datetime import datetime
 import queue
 from collections import deque
-import random
 
 # 配置文件路径
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 JSON_FILE = os.path.join(SCRIPT_DIR, "servers.json")
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
-MODS_DIR = os.path.join(SCRIPT_DIR, "mods_config")
 
 # 检测操作系统并设置颜色支持
 IS_WINDOWS = os.name == 'nt'
@@ -25,7 +23,6 @@ IS_WINDOWS = os.name == 'nt'
 
 # 全局变量
 global_cancel_query = False
-global_chat_client = None
 
 # 服务器类型常量
 SERVER_TYPE_JAVA = "java"
@@ -78,37 +75,11 @@ except ImportError as e:
 
 # 尝试导入server_info模块
 try:
-    from server_info import ServerInfoInterface, MinecraftQuery, MinecraftChatClient
+    from server_info import ServerInfoInterface, MinecraftQuery
     SERVER_INFO_AVAILABLE = True
 except ImportError:
     SERVER_INFO_AVAILABLE = False
     print(f"{Colors.YELLOW}警告: 未找到server_info模块，详细查询功能将受限{Colors.RESET}")
-
-# === Forge/FML mod 列表缓存与探测 ===
-try:
-    from forge_login_client import get_mods_from_server
-except ImportError:
-    def get_mods_from_server(host, port, username, mods_hint=None):
-        return []
-
-def load_cached_mods(host: str, port: int) -> list:
-    os.makedirs(MODS_DIR, exist_ok=True)
-    fname = f"{host.replace('.', '_')}_{port}.json"
-    path = os.path.join(MODS_DIR, fname)
-    if os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return []
-
-def save_mods(host: str, port: int, mods: list):
-    os.makedirs(MODS_DIR, exist_ok=True)
-    fname = f"{host.replace('.', '_')}_{port}.json"
-    path = os.path.join(MODS_DIR, fname)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(mods, f, ensure_ascii=False, indent=2)
 
 # === DNS 工具类 ===
 class DNSUtils:
@@ -672,8 +643,6 @@ class ServerManager:
                     server.setdefault('last_query', 0)
                     server.setdefault('query_history', deque(maxlen=10))
                     server.setdefault('player_history', deque(maxlen=10))
-                    server.setdefault('mod_list', [])
-                    server.setdefault('chat_username', f"Player{random.randint(1000, 9999)}")
 
                 print(f"{Colors.CYAN}已加载 {len(self.servers)} 个服务器{Colors.RESET}")
             except Exception as e:
@@ -711,9 +680,7 @@ class ServerManager:
         server.update({
             'last_query': 0,
             'query_history': deque(maxlen=10),
-            'player_history': deque(maxlen=10),
-            'mod_list': [],
-            'chat_username': f"Player{random.randint(1000, 9999)}"
+            'player_history': deque(maxlen=10)
         })
         self.servers.append(server)
         self.save_servers()
@@ -821,12 +788,6 @@ class ServerManager:
                             'online': players.get('online', 0),
                             'max': players.get('max', 0)
                         })
-                        
-                    # 记录mod列表
-                    if (server_type == SERVER_TYPE_JAVA and 'error' not in results[idx] and
-                        'modinfo' in results[idx] and 'modList' in results[idx]['modinfo']):
-                        mod_list = results[idx]['modinfo']['modList']
-                        self.servers[server_index]['mod_list'] = mod_list
                         
             except Exception as e:
                 server_type = server.get('type', SERVER_TYPE_JAVA)
@@ -1113,8 +1074,8 @@ class ServerManager:
 
         print("-" * 40)
 
-    def show_server_info(self, index, show_all_mods=False):
-        """显示指定服务器的详细信息，包括历史统计和mod列表"""
+    def show_server_info(self, index):
+        """显示指定服务器的详细信息，包括历史统计"""
         if index < 0 or index >= len(self.servers):
             print(f"{Colors.RED}无效的服务器序号{Colors.RESET}")
             return
@@ -1155,10 +1116,6 @@ class ServerManager:
                         print(f"    {result['motd']}")
 
                     # 获取mod列表（如果可用）
-                    if server_type == SERVER_TYPE_JAVA:
-                        mod_list = ServerInfoInterface.get_mod_list(server['ip'], port, server_type, timeout=3)
-                        if mod_list:
-                            server['mod_list'] = mod_list
             except Exception as e:
                 print(f"{Colors.YELLOW}使用server_info查询失败: {str(e)}{Colors.RESET}")
                 print(f"{Colors.CYAN}回退到基本查询...{Colors.RESET}")
@@ -1239,27 +1196,6 @@ class ServerManager:
         else:
             print(f"  {Colors.YELLOW}暂无历史数据{Colors.RESET}")
 
-        # 显示mod列表（仅Java版）
-        if server_type == SERVER_TYPE_JAVA and server.get('mod_list'):
-            print(f"\n{Colors.BOLD}Mod列表 ({len(server['mod_list'])} 个):{Colors.RESET}")
-
-            if not show_all_mods and len(server['mod_list']) > 10:
-                # 显示前5个和后5个mod
-                for i, mod in enumerate(server['mod_list'][:5]):
-                    print(f"  {Colors.GREEN}•{Colors.RESET} {mod.get('modid', '未知')} - {mod.get('version', '未知')}")
-
-                print(f"  {Colors.CYAN}... 省略 {len(server['mod_list']) - 10} 个mod ...{Colors.RESET}")
-
-                for i, mod in enumerate(server['mod_list'][-5:]):
-                    idx = len(server['mod_list']) - 5 + i
-                    print(f"  {Colors.GREEN}•{Colors.RESET} {mod.get('modid', '未知')} - {mod.get('version', '未知')}")
-
-                print(f"\n{Colors.CYAN}使用 'info {index+1} -allmod' 查看完整mod列表{Colors.RESET}")
-            else:
-                # 显示所有mod
-                for i, mod in enumerate(server['mod_list']):
-                    print(f"  {Colors.GREEN}•{Colors.RESET} {mod.get('modid', '未知')} - {mod.get('version', '未知')}")
-
         print("-" * 60)
 
         # 等待用户按回车返回
@@ -1285,102 +1221,6 @@ class ServerManager:
         print(f"\n{Colors.GREEN}已退出监控模式{Colors.RESET}")
         input(f"{Colors.CYAN}按回车键返回主菜单...{Colors.RESET}")
         return True
-
-    def chat_server(self, index):
-      """连接到指定服务器的聊天"""
-      if index < 0 or index >= len(self.servers):
-        print(f"{Colors.RED}无效的服务器序号{Colors.RESET}")
-        return False
-
-      if not SERVER_INFO_AVAILABLE:
-        print(f"{Colors.RED}聊天功能需要server_info模块，但未找到{Colors.RESET}")
-        return False
-
-      server = self.servers[index]
-      server_type = server.get('type', SERVER_TYPE_JAVA)
-      port = server.get('port', 25565 if server_type == SERVER_TYPE_JAVA else 19132)
-
-      if server_type != SERVER_TYPE_JAVA:
-        print(f"{Colors.RED}只有Java版服务器支持聊天功能{Colors.RESET}")
-        return False
-
-      print(f"{Colors.CYAN}正在连接到 {server['name']} 的聊天...{Colors.RESET}")
-
-      # 获取聊天用户名
-      username = server.get('chat_username', f"Player{random.randint(1000, 9999)}")
-      print(f"{Colors.CYAN}使用用户名: {username}{Colors.RESET}")
-
-      # 先尝试获取服务器版本信息
-      print(f"{Colors.CYAN}正在检测服务器版本...{Colors.RESET}")
-      try:
-        result = MinecraftPing.ping(server['ip'], port, timeout=5, server_type="java")
-        if 'error' in result:
-          print(f"{Colors.YELLOW}无法检测服务器版本，使用默认版本{Colors.RESET}")
-          server_version = None
-        else:
-          server_version = result.get('version', {}).get('name', None)
-          if server_version:
-            print(f"{Colors.GREEN}检测到服务器版本: {server_version}{Colors.RESET}")
-          else:
-            print(f"{Colors.YELLOW}无法获取服务器版本，使用默认版本{Colors.RESET}")
-            server_version = None
-      except Exception as e:
-        print(f"{Colors.YELLOW}版本检测失败: {str(e)}{Colors.RESET}")
-        server_version = None
-
-      # 创建聊天客户端
-      global global_chat_client
-      try:
-        # 获取服务器的mod列表
-        forge_mods = server.get('mod_list', [])
-
-        # 添加调试信息
-        print(f"{Colors.CYAN}创建聊天客户端实例...{Colors.RESET}")
-        chat_client = MinecraftChatClient(server['ip'], port, username, server_version)
-        chat_client.set_server_name(server['name'])
-
-        # 设置Forge mod列表
-        if forge_mods:
-          chat_client.set_forge_mods(forge_mods)
-          print(f"{Colors.GREEN}检测到Forge服务器，已加载 {len(forge_mods)} 个Mod{Colors.RESET}")
-
-        # 设置消息回调
-        def chat_callback(sender, message):
-          timestamp = datetime.now().strftime("%H:%M:%S")
-          print(f"{Colors.CYAN}[{timestamp}] {Colors.GREEN}{sender}:{Colors.RESET} {message}")
-
-        chat_client.set_chat_callback(chat_callback)
-
-        # 连接到服务器
-        if chat_client.start_listening():
-          global_chat_client = chat_client
-          print(f"{Colors.GREEN}已连接到聊天，输入消息发送，输入 '/quit' 退出聊天{Colors.RESET}")
-
-          # 聊天循环
-          while True:
-            try:
-              message = input().strip()
-              if message.lower() == '/quit':
-                break
-              if message:
-                chat_client.send_chat_message(message)
-            except KeyboardInterrupt:
-              print(f"\n{Colors.YELLOW}退出聊天{Colors.RESET}")
-              break
-
-          # 断开连接
-          chat_client.stop()
-          global_chat_client = None
-          print(f"{Colors.GREEN}已断开聊天连接{Colors.RESET}")
-        else:
-          print(f"{Colors.RED}连接聊天失败{Colors.RESET}")
-          return False
-
-      except Exception as e:
-        print(f"{Colors.RED}聊天连接错误: {str(e)}{Colors.RESET}")
-        return False
-
-      return True
 
     def scan_ports(self, host, timeout=1):
         """扫描常用Minecraft端口"""
@@ -1721,29 +1561,26 @@ class ServerManager:
 def print_help(manager):
     """打印帮助信息"""
     print(f"\n{Colors.BOLD}可用命令:{Colors.RESET}")
-    print(f"  {Colors.GREEN}n{Colors.RESET}: 下一页")
-    print(f"  {Colors.GREEN}p{Colors.RESET}: 上一页")
-    print(f"  {Colors.GREEN}g{Colors.RESET}: 跳转到指定页")
-    print(f"  {Colors.GREEN}a{Colors.RESET}: 添加服务器")
-    print(f"  {Colors.GREEN}d{Colors.RESET}: 删除服务器")
-    print(f"  {Colors.GREEN}u{Colors.RESET}: 更新服务器信息")
-    print(f"  {Colors.GREEN}s{Colors.RESET}: 保存服务器列表")
-    print(f"  {Colors.GREEN}r{Colors.RESET}: 刷新当前页")
-    print(f"  {Colors.GREEN}clear{Colors.RESET}: 强制清除所有缓存")
-    print(f"  {Colors.GREEN}o{Colors.RESET}: 排序服务器")
-    print(f"  {Colors.GREEN}c{Colors.RESET}: 更改每页显示数量 (当前: {manager.page_size})")
-    print(f"  {Colors.GREEN}f{Colors.RESET}: 筛选服务器类型")
-    print(f"  {Colors.GREEN}players <序号>{Colors.RESET}: 查看指定服务器的完整玩家列表")
-    print(f"  {Colors.GREEN}info <序号>{Colors.RESET}: 查看指定服务器的详细信息")
-    print(f"  {Colors.GREEN}info <序号> -allmod{Colors.RESET}: 查看指定服务器的完整mod列表")
-    print(f"  {Colors.GREEN}chat <序号>{Colors.RESET}: 连接到指定服务器的聊天")
-    print(f"  {Colors.GREEN}monitor <序号>{Colors.RESET}: 监控指定服务器的状态变化")
-    print(f"  {Colors.GREEN}monitor <序号1> <序号2> ...{Colors.RESET}: 同时监控多个服务器的状态变化")
-    print(f"  {Colors.GREEN}scan{Colors.RESET}: 扫描IP/域名下的Minecraft服务器端口")
-    print(f"  {Colors.GREEN}scanall{Colors.RESET}: 扫描IP/域名下的所有端口 (1-65535)")
-    print(f"  {Colors.GREEN}mods <序号>{Colors.RESET}: 配置指定服务器的Mod列表")
-    print(f"  {Colors.GREEN}h{Colors.RESET}: 显示帮助")
-    print(f"  {Colors.GREEN}q{Colors.RESET}: 退出")
+    print(f"  {Colors.GREEN}n / next{Colors.RESET}: ???")
+    print(f"  {Colors.GREEN}p / prev{Colors.RESET}: ???")
+    print(f"  {Colors.GREEN}g / goto{Colors.RESET}: ??????")
+    print(f"  {Colors.GREEN}a / add{Colors.RESET}: ?????")
+    print(f"  {Colors.GREEN}d / delete{Colors.RESET}: ?????")
+    print(f"  {Colors.GREEN}u / update{Colors.RESET}: ???????")
+    print(f"  {Colors.GREEN}s / save{Colors.RESET}: ???????")
+    print(f"  {Colors.GREEN}r / refresh{Colors.RESET}: ?????")
+    print(f"  {Colors.GREEN}clear / clearcache{Colors.RESET}: ????????")
+    print(f"  {Colors.GREEN}o / sort{Colors.RESET}: ?????")
+    print(f"  {Colors.GREEN}c / pagesize{Colors.RESET}: ???????? (??: {manager.page_size})")
+    print(f"  {Colors.GREEN}f / filter{Colors.RESET}: ???????")
+    print(f"  {Colors.GREEN}players / player <??>{Colors.RESET}: ??????????????")
+    print(f"  {Colors.GREEN}info / detail <??>{Colors.RESET}: ????????????")
+    print(f"  {Colors.GREEN}monitor / mon <??>{Colors.RESET}: ????????????")
+    print(f"  {Colors.GREEN}monitor / mon <??1> <??2> ...{Colors.RESET}: ??????????????")
+    print(f"  {Colors.GREEN}scan / scancommon{Colors.RESET}: ??IP/????Minecraft?????")
+    print(f"  {Colors.GREEN}scanall / scanfull{Colors.RESET}: ??IP/????????(1-65535)")
+    print(f"  {Colors.GREEN}h / help{Colors.RESET}: ????")
+    print(f"  {Colors.GREEN}q / quit{Colors.RESET}: ??")
 
     # 监控功能说明
     print(f"\n{Colors.BOLD}监控功能说明:{Colors.RESET}")
@@ -1754,27 +1591,12 @@ def print_help(manager):
     print(f"  • 按 'l' 查看完整日志，支持滚动和导出")
     print(f"  • 按 'q' 或 Ctrl+C 退出监控模式")
 
-    # 聊天功能说明
-    print(f"\n{Colors.BOLD}聊天功能说明:{Colors.RESET}")
-    print(f"  • 仅支持Java版服务器")
-    print(f"  • 在聊天中输入 '/quit' 退出聊天模式")
-    print(f"  • 按 Ctrl+C 也可以退出聊天模式")
-    print(f"  • 聊天消息会自动记录到日志文件中")
-
     # 等待用户按回车继续
     input(f"\n{Colors.CYAN}按回车键继续...{Colors.RESET}")
 
 def sigint_handler(signum, frame):
     """处理 Ctrl+C 信号"""
     global global_cancel_query
-    global global_chat_client
-
-    # 如果正在聊天，退出聊天
-    if global_chat_client:
-        global_chat_client.stop()
-        global_chat_client = None
-        print(f"\n{Colors.YELLOW}已退出聊天模式{Colors.RESET}")
-        return
 
     global_cancel_query = True
     print(f"\n{Colors.YELLOW}正在取消查询...{Colors.RESET}")
@@ -1799,6 +1621,34 @@ def main():
         except (KeyboardInterrupt, EOFError):
             print(f"\n{Colors.YELLOW}返回主菜单...{Colors.RESET}")
             continue
+
+        if not cmd:
+            continue
+
+        cmd_parts = cmd.split()
+        cmd_aliases = {
+            'n': 'n', 'next': 'n',
+            'p': 'p', 'prev': 'p', 'previous': 'p',
+            'g': 'g', 'goto': 'g', 'page': 'g',
+            'a': 'a', 'add': 'a',
+            'd': 'd', 'delete': 'd', 'del': 'd', 'remove': 'd',
+            'u': 'u', 'update': 'u', 'edit': 'u',
+            's': 's', 'save': 's',
+            'r': 'r', 'refresh': 'r', 'reload': 'r',
+            'clear': 'clear', 'clearcache': 'clear',
+            'o': 'o', 'sort': 'o', 'order': 'o',
+            'c': 'c', 'pagesize': 'c', 'size': 'c',
+            'f': 'f', 'filter': 'f',
+            'players': 'players', 'player': 'players',
+            'info': 'info', 'detail': 'info',
+            'monitor': 'monitor', 'mon': 'monitor',
+            'scan': 'scan', 'scancommon': 'scan',
+            'scanall': 'scanall', 'scanfull': 'scanall',
+            'h': 'h', 'help': 'h',
+            'q': 'q', 'quit': 'q', 'exit': 'q',
+        }
+        cmd_parts[0] = cmd_aliases.get(cmd_parts[0], cmd_parts[0])
+        cmd = " ".join(cmd_parts)
 
         if cmd == 'n':  # 下一页
             if manager.current_page < manager.max_page():
@@ -2022,24 +1872,7 @@ def main():
                 actual_index = manager.current_page * manager.page_size + index
 
                 if 0 <= actual_index < len(manager.servers):
-                    show_all_mods = '-allmod' in parts
-                    manager.show_server_info(actual_index, show_all_mods)
-                else:
-                    print(f"{Colors.RED}无效的服务器序号{Colors.RESET}")
-            except ValueError:
-                print(f"{Colors.RED}请输入有效的服务器序号{Colors.RESET}")
-        elif cmd.startswith('chat '):  # 连接到服务器聊天
-            try:
-                parts = cmd.split()
-                if len(parts) < 2:
-                    print(f"{Colors.RED}请指定服务器序号{Colors.RESET}")
-                    continue
-
-                index = int(parts[1]) - 1
-                actual_index = manager.current_page * manager.page_size + index
-
-                if 0 <= actual_index < len(manager.servers):
-                    manager.chat_server(actual_index)
+                    manager.show_server_info(actual_index)
                 else:
                     print(f"{Colors.RED}无效的服务器序号{Colors.RESET}")
             except ValueError:
@@ -2165,46 +1998,6 @@ def main():
         elif cmd == 'q':  # 退出
             print(f"{Colors.GREEN}再见!{Colors.RESET}")
             break
-        elif cmd.startswith('mods '):  # 配置Mod列表
-            try:
-                parts = cmd.split()
-                if len(parts) < 2:
-                    print(f"{Colors.RED}请指定服务器序号{Colors.RESET}")
-                    continue
-
-                index = int(parts[1]) - 1
-                actual_index = manager.current_page * manager.page_size + index
-
-                if 0 <= actual_index < len(manager.servers):
-                    server = manager.servers[actual_index]
-
-                    if server.get('type', SERVER_TYPE_JAVA) != SERVER_TYPE_JAVA:
-                        print(f"{Colors.RED}只有Java版服务器需要配置Mod{Colors.RESET}")
-                        continue
-
-                    print(f"{Colors.CYAN}正在为 {server['name']} 配置Mod...{Colors.RESET}")
-
-                    if not SERVER_INFO_AVAILABLE:
-                        print(f"{Colors.RED}Mod配置需要server_info模块，但未找到{Colors.RESET}")
-                        continue
-
-                    # 创建MinecraftLogin实例并选择mods文件夹
-                    from server_info import MinecraftLogin
-                    login = MinecraftLogin(server['ip'], server.get('port', 25565), server.get('chat_username', 'Player'))
-                    mods_list = login.select_mods_folder()
-
-                    if mods_list:
-                        server['mod_list'] = mods_list
-                        manager.save_servers()
-                        print(f"{Colors.GREEN}已成功配置 {len(mods_list)} 个Mod{Colors.RESET}")
-                    else:
-                        print(f"{Colors.YELLOW}未选择Mod或选择失败{Colors.RESET}")
-                else:
-                    print(f"{Colors.RED}无效的服务器序号{Colors.RESET}")
-            except ValueError:
-                print(f"{Colors.RED}请输入有效的服务器序号{Colors.RESET}")
-            except Exception as e:
-                print(f"{Colors.RED}配置Mod时出错: {str(e)}{Colors.RESET}")
         else:
             print(f"{Colors.RED}未知命令 (输入'h'查看帮助){Colors.RESET}")
 

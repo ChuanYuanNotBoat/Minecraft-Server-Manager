@@ -7,3 +7,5 @@ logs/
 notification_config.json
 .gitignore
 minecraft_monitor_icon.png
+servers.json.bak_*
+*.bak_invalid

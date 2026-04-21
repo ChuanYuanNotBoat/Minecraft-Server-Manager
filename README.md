@@ -92,21 +92,27 @@ python -c "from server import MinecraftPing; print(MinecraftPing.ping('server.ad
 
 ```
 Minecraft-Server-Manager/
-├── server.py          # 主管理程序
-├── server_monitor.py  # 服务器监控模块
-├── server_info.py     # 服务器查询核心模块（可选）
-├── msm/               # 公共模块（常量、命令别名、帮助文本）
-│   ├── constants.py
-│   ├── command_aliases.py
-│   ├── help_text.py
-│   ├── dns_utils.py
-│   ├── json_store.py
-│   └── cli/
-│       └── index_parser.py
-├── servers.json       # 服务器列表数据（自动生成）
-├── config.json        # 配置文件（自动生成）
-├── requirements.txt   # Python依赖项
-└── README.md          # 项目说明
+??? server.py          # Main CLI script
+??? server_monitor.py  # Monitoring module
+??? server_info.py     # Detailed query module
+??? msm/               # Shared modules
+?   ??? constants.py
+?   ??? command_aliases.py
+?   ??? help_text.py
+?   ??? dns_utils.py
+?   ??? json_store.py
+?   ??? cli/
+?       ??? index_parser.py
+?       ??? scan_workflow.py
+?       ??? monitor_workflow.py
+?       ??? query_workflow.py
+?       ??? pagination_workflow.py
+?       ??? list_workflow.py
+?       ??? server_crud_workflow.py
+??? servers.json       # Server list data (auto-generated)
+??? config.json        # Config file (auto-generated)
+??? requirements.txt   # Python dependencies
+??? README.md          # Project docs
 ```
 
 ## 扩展功能计划

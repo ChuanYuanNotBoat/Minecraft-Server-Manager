@@ -24,8 +24,12 @@ from msm.constants import (
 from msm.help_text import print_help as print_common_help
 from msm.dns_utils import DNSUtils
 from msm.json_store import load_json_file, save_json_file
-from msm.cli.index_parser import parse_multi_server_indices, parse_single_server_index
+from msm.cli.pagination_workflow import change_page_size, go_next_page, go_prev_page, go_to_page
+from msm.cli.list_workflow import clear_all_cache, filter_servers, refresh_current_page, save_servers, sort_servers
+from msm.cli.monitor_workflow import run_monitor_workflow
+from msm.cli.query_workflow import run_info_workflow, run_players_workflow
 from msm.cli.scan_workflow import run_scan_workflow
+from msm.cli.server_crud_workflow import add_server_interactive, delete_server_interactive, update_server_interactive
 
 # 全局变量
 global_cancel_query = False
@@ -1473,234 +1477,42 @@ def main():
             continue
 
         if cmd == 'n':  # 下一页
-            if manager.current_page < manager.max_page():
-                manager.current_page += 1
-            else:
-                print(f"{Colors.YELLOW}已经是最后一页{Colors.RESET}")
+            go_next_page(manager, Colors)
         elif cmd == 'p':  # 上一页
-            if manager.current_page > 0:
-                manager.current_page -= 1
-            else:
-                print(f"{Colors.YELLOW}已经是第一页{Colors.RESET}")
+            go_prev_page(manager, Colors)
         elif cmd == 'g':  # 跳转到指定页
-            try:
-                page = int(input("输入页码: ").strip()) - 1
-                if 0 <= page <= manager.max_page():
-                    manager.current_page = page
-                else:
-                    print(f"{Colors.RED}页码超出范围 (1-{manager.max_page() + 1}){Colors.RESET}")
-            except ValueError:
-                print(f"{Colors.RED}请输入有效数字!{Colors.RESET}")
-            except (KeyboardInterrupt, EOFError):
-                print(f"\n{Colors.YELLOW}操作取消{Colors.RESET}")
+            go_to_page(manager, Colors)
         elif cmd == 'a':  # 添加服务器
-            try:
-                name = input("服务器名称: ").strip()
-                if not name:
-                    print(f"{Colors.RED}名称不能为空!{Colors.RESET}")
-                    continue
-
-                ip = input("IP地址: ").strip()
-                if not ip:
-                    print(f"{Colors.RED}IP地址不能为空!{Colors.RESET}")
-                    continue
-
-                # 设置默认服务器类型
-                server_type = SERVER_TYPE_JAVA
-
-                # 自动检测服务器类型
-                print(f"{Colors.CYAN}正在尝试自动检测服务器类型...{Colors.RESET}")
-                port_str = input("端口 (留空自动检测): ").strip()
-                port = 25565  # 默认Java版端口
-
-                if port_str:
-                    try:
-                        port = int(port_str)
-                    except ValueError:
-                        print(f"{Colors.YELLOW}端口必须是数字，使用默认值25565{Colors.RESET}")
-                        port = 25565
-
-                    # 如果用户输入了端口，询问服务器类型
-                    server_type_input = input("服务器类型 (java/bedrock, 默认java): ").strip().lower()
-                    if server_type_input in ['java', 'bedrock']:
-                        server_type = server_type_input
-                    else:
-                        server_type = SERVER_TYPE_JAVA
-                else:
-                    # 尝试自动检测
-                    detected_type = MinecraftPing.detect_server_type(ip, port)
-                    if detected_type == "java":
-                        print(f"{Colors.GREEN}检测到Java版服务器{Colors.RESET}")
-                        server_type = "java"
-                    elif detected_type == "bedrock":
-                        print(f"{Colors.MAGENTA}检测到基岩版服务器{Colors.RESET}")
-                        server_type = "bedrock"
-                        port = 19132  # 基岩版默认端口
-                    else:
-                        print(f"{Colors.YELLOW}无法自动检测服务器类型，请手动选择{Colors.RESET}")
-                        server_type_input = input("服务器类型 (java/bedrock, 默认java): ").strip().lower()
-                        if server_type_input in ['java', 'bedrock']:
-                            server_type = server_type_input
-                        else:
-                            server_type = SERVER_TYPE_JAVA
-
-                # 如果用户没有输入端口，但选择了基岩版，使用基岩版默认端口
-                if not port_str and server_type == SERVER_TYPE_BEDROCK:
-                    port = 19132
-
-                note = input("备注 (可选): ").strip()
-
-                manager.add_server({
-                    'name': name,
-                    'ip': ip,
-                    'port': port,
-                    'type': server_type,
-                    'note': note if note else ""
-                })
-            except KeyboardInterrupt:
-                print(f"\n{Colors.YELLOW}操作取消{Colors.RESET}")
-            except EOFError:
-                print(f"\n{Colors.YELLOW}操作取消{Colors.RESET}")
+            add_server_interactive(
+                manager,
+                Colors,
+                MinecraftPing,
+                SERVER_TYPE_JAVA,
+                SERVER_TYPE_BEDROCK,
+            )
         elif cmd == 'd':  # 删除服务器
-            try:
-                index = int(input("输入要删除的序号: ").strip()) - 1
-                actual_index = manager.current_page * manager.page_size + index
-                if 0 <= actual_index < len(manager.servers):
-                    manager.delete_server(actual_index)
-                else:
-                    print(f"{Colors.RED}无效的序号{Colors.RESET}")
-            except ValueError:
-                print(f"{Colors.RED}请输入有效数字!{Colors.RESET}")
-            except (KeyboardInterrupt, EOFError):
-                print(f"\n{Colors.YELLOW}操作取消{Colors.RESET}")
+            delete_server_interactive(manager, Colors)
         elif cmd == 'u':  # 更新服务器
-            try:
-                index = int(input("输入要更新的序号: ").strip()) - 1
-                actual_index = manager.current_page * manager.page_size + index
-                if 0 <= actual_index < len(manager.servers):
-                    server = manager.servers[actual_index]
-                    print(f"当前名称: {Colors.CYAN}{server.get('name', '')}{Colors.RESET}")
-                    print(f"当前地址: {Colors.CYAN}{server.get('ip', '')}:{server.get('port', 25565)}{Colors.RESET}")
-                    print(f"当前类型: {Colors.CYAN}{server.get('type', 'java')}{Colors.RESET}")
-                    print(f"当前备注: {Colors.CYAN}{server.get('note', '')}{Colors.RESET}")
-
-                    field = input("更新字段 (name/ip/port/type/note): ").strip().lower()
-
-                    if field not in ['name', 'ip', 'port', 'type', 'note']:
-                        print(f"{Colors.RED}无效字段!{Colors.RESET}")
-                        continue
-
-                    value = input("新值: ").strip()
-
-                    # 验证服务器类型
-                    if field == 'type' and value not in ['java', 'bedrock']:
-                        print(f"{Colors.RED}服务器类型必须是 'java' 或 'bedrock'{Colors.RESET}")
-                        continue
-
-                    manager.update_server(actual_index, field, value)
-                else:
-                    print(f"{Colors.RED}无效的序号{Colors.RESET}")
-            except (ValueError, KeyError):
-                print(f"{Colors.RED}输入无效!{Colors.RESET}")
-            except (KeyboardInterrupt, EOFError):
-                print(f"\n{Colors.YELLOW}操作取消{Colors.RESET}")
+            update_server_interactive(manager, Colors)
         elif cmd == 's':  # 保存
-            if manager.save_servers():
-                print(f"{Colors.GREEN}保存成功!{Colors.RESET}")
+            save_servers(manager, Colors)
         elif cmd == 'r':  # 刷新
-            print(f"{Colors.GREEN}刷新当前页...{Colors.RESET}")
-            # 清除缓存
-            MinecraftPing.cache.clear()
-            MinecraftPing.srv_cache.clear()
+            refresh_current_page(MinecraftPing, Colors)
         elif cmd == 'clear':  # 强制清除所有缓存
-            print(f"{Colors.GREEN}清除所有缓存...{Colors.RESET}")
-            MinecraftPing.clear_all_caches()
+            clear_all_cache(MinecraftPing, Colors)
         elif cmd == 'o':  # 排序
-            try:
-                print(f"{Colors.CYAN}可用排序字段: name, ip, port, type{Colors.RESET}")
-                field = input("排序字段: ").strip().lower()
-                if field in ['name', 'ip', 'port', 'type']:
-                    order = input("排序顺序 (asc/desc): ").strip().lower() or 'asc'
-                    if order not in ['asc', 'desc']:
-                        order = 'asc'
-                    manager.sort_servers(field, order)
-                    manager.current_page = 0  # 排序后回到第一页
-                else:
-                    print(f"{Colors.RED}无效的排序字段{Colors.RESET}")
-            except (KeyboardInterrupt, EOFError):
-                print(f"\n{Colors.YELLOW}操作取消{Colors.RESET}")
+            sort_servers(manager, Colors)
         elif cmd == 'c':  # 更改每页数量
-            try:
-                new_size = int(input(f"每页显示数量 (1-50, 当前: {manager.page_size}): ").strip())
-                if 1 <= new_size <= 50:
-                    old_page = manager.current_page
-                    manager.page_size = new_size
-                    
-                    # 保存页面设置到配置文件
-                    manager.save_page_size()
-                    
-                    # 调整当前页码，确保不会超出范围
-                    max_page = manager.max_page()
-                    if old_page > max_page:
-                        manager.current_page = max_page
-                    
-                    print(f"{Colors.GREEN}每页显示数量已改为 {new_size}{Colors.RESET}")
-                else:
-                    print(f"{Colors.RED}数量必须在1-50之间{Colors.RESET}")
-            except ValueError:
-                print(f"{Colors.RED}请输入有效数字!{Colors.RESET}")
-            except (KeyboardInterrupt, EOFError):
-                print(f"\n{Colors.YELLOW}操作取消{Colors.RESET}")
+            change_page_size(manager, Colors)
         elif cmd == 'f':  # 筛选服务器类型
-            try:
-                print(f"{Colors.CYAN}可用筛选选项:{Colors.RESET}")
-                print(f"  {Colors.GREEN}all{Colors.RESET}: 显示所有服务器")
-                print(f"  {Colors.GREEN}java{Colors.RESET}: 仅显示Java版服务器")
-                print(f"  {Colors.GREEN}bedrock{Colors.RESET}: 仅显示基岩版服务器")
-
-                filter_type = input("选择筛选类型: ").strip().lower()
-                if filter_type in ['all', 'java', 'bedrock']:
-                    manager.filter_type = filter_type
-                    manager.current_page = 0  # 回到第一页
-                    print(f"{Colors.GREEN}已筛选: {filter_type}{Colors.RESET}")
-                else:
-                    print(f"{Colors.RED}无效的筛选类型{Colors.RESET}")
-            except (KeyboardInterrupt, EOFError):
-                print(f"\n{Colors.YELLOW}操作取消{Colors.RESET}")
+            filter_servers(manager, Colors)
 
         elif cmd.startswith('players '):  # players list
-            parts = cmd.split()
-            actual_index = parse_single_server_index(parts, manager, Colors)
-            if actual_index is not None:
-                manager.show_players(actual_index)
+            run_players_workflow(cmd.split(), manager, Colors)
         elif cmd.startswith('info '):  # server details
-            parts = cmd.split()
-            actual_index = parse_single_server_index(parts, manager, Colors)
-            if actual_index is not None:
-                manager.show_server_info(actual_index)
+            run_info_workflow(cmd.split(), manager, Colors)
         elif cmd.startswith('monitor '):  # monitor servers
-            try:
-                parts = cmd.split()
-                if len(parts) < 2:
-                    print(f"{Colors.RED}Please specify server index{Colors.RESET}")
-                    continue
-
-                # Support `monitor all`
-                if parts[1].lower() == 'all':
-                    from server_monitor import monitor_all_servers
-                    if monitor_all_servers(manager):
-                        print(f"{Colors.GREEN}Started monitoring all servers{Colors.RESET}")
-                    continue
-
-                indices = parse_multi_server_indices(parts, manager, Colors)
-                if indices:
-                    from server_monitor import monitor_multiple_servers
-                    if monitor_multiple_servers(manager, indices):
-                        print(f"{Colors.GREEN}Started monitoring {len(indices)} server(s){Colors.RESET}")
-                else:
-                    print(f"{Colors.RED}No valid server index provided{Colors.RESET}")
-            except Exception as e:
-                print(f"{Colors.RED}Failed to start monitor: {str(e)}{Colors.RESET}")
+            run_monitor_workflow(cmd.split(), manager, Colors)
         elif cmd == 'scan':  # scan ports
             run_scan_workflow(manager, Colors, scan_all=False)
         elif cmd == 'scanall':  # scan all ports

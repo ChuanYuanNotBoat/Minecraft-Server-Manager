@@ -13,10 +13,12 @@ from msm.cli import pagination_workflow
 from msm.cli import prefix_command_dispatcher
 from msm.cli import query_workflow
 from msm.cli import scan_workflow
+from msm.cli import session_workflow
 from msm.cli import server_crud_workflow
 
 
 class FakeColors:
+    BOLD = "<b>"
     RED = "<r>"
     GREEN = "<g>"
     YELLOW = "<y>"
@@ -39,6 +41,7 @@ class FakeManager:
         self.scan_ports_called = []
         self.scan_all_ports_called = []
         self.deleted_index = None
+        self.displayed_servers = None
 
     def max_page(self):
         if not self.servers:
@@ -78,6 +81,12 @@ class FakeManager:
 
     def delete_server(self, idx):
         self.deleted_index = idx
+
+    def get_page(self):
+        return ["s1", "s2"]
+
+    def display_servers(self, servers):
+        self.displayed_servers = servers
 
 
 class FakePing:
@@ -272,6 +281,19 @@ class TestCommandHandler(unittest.TestCase):
             result = command_handler.handle_command("unknown", m, FakeColors, FakePing, lambda _: None)
         self.assertFalse(result)
         self.assertTrue(p.called)
+
+
+class TestSessionWorkflow(unittest.TestCase):
+    def test_render_current_page_calls_display(self):
+        m = FakeManager()
+        session_workflow.render_current_page(m)
+        self.assertEqual(m.displayed_servers, ["s1", "s2"])
+
+    def test_read_normalized_command(self):
+        m = FakeManager()
+        with patch("builtins.input", return_value=" H "):
+            cmd = session_workflow.read_normalized_command(m, FakeColors)
+        self.assertEqual(cmd, "h")
 
 
 if __name__ == "__main__":

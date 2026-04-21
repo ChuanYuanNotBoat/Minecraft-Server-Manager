@@ -12,7 +12,6 @@ from datetime import datetime
 import queue
 from collections import deque
 
-from msm.command_aliases import normalize_command
 from msm.constants import (
     CONFIG_FILE,
     JSON_FILE,
@@ -25,6 +24,7 @@ from msm.help_text import print_help as print_common_help
 from msm.dns_utils import DNSUtils
 from msm.json_store import load_json_file, save_json_file
 from msm.cli.command_handler import handle_command
+from msm.cli.session_workflow import print_startup_banner, read_normalized_command, render_current_page
 
 # 全局变量
 global_cancel_query = False
@@ -1453,21 +1453,11 @@ def main():
 
     manager = ServerManager()
 
-    print(f"{Colors.BOLD}Minecraft 服务器管理器{Colors.RESET}")
-    print(f"{Colors.CYAN}已加载 {len(manager.servers)} 个服务器，每页显示 {manager.page_size} 个{Colors.RESET}")
+    print_startup_banner(manager, Colors)
 
     while True:
-        # 显示当前页
-        current_servers = manager.get_page()
-        manager.display_servers(current_servers)
-
-        # 用户命令
-        try:
-            cmd = input(f"\n{Colors.BOLD}命令 (h=帮助, 当前第{manager.current_page + 1}/{manager.max_page() + 1}页):{Colors.RESET} ").strip().lower()
-        except (KeyboardInterrupt, EOFError):
-            print(f"\n{Colors.YELLOW}返回主菜单...{Colors.RESET}")
-            continue
-        cmd = normalize_command(cmd)
+        render_current_page(manager)
+        cmd = read_normalized_command(manager, Colors)
         if not cmd:
             continue
 

@@ -24,7 +24,8 @@ from msm.help_text import print_help as print_common_help
 from msm.dns_utils import DNSUtils
 from msm.json_store import load_json_file, save_json_file
 from msm.cli.command_handler import handle_command
-from msm.cli.session_workflow import print_startup_banner, read_normalized_command, render_current_page
+from msm.cli.main_loop import run_main_loop
+from msm.cli.session_workflow import print_startup_banner
 
 # 全局变量
 global_cancel_query = False
@@ -1454,22 +1455,7 @@ def main():
     manager = ServerManager()
 
     print_startup_banner(manager, Colors)
-
-    while True:
-        render_current_page(manager)
-        cmd = read_normalized_command(manager, Colors)
-        if not cmd:
-            continue
-
-        should_exit = handle_command(
-            cmd,
-            manager,
-            Colors,
-            MinecraftPing,
-            print_help,
-        )
-        if should_exit:
-            break
+    run_main_loop(manager, Colors, MinecraftPing, print_help, handle_command)
 
 if __name__ == "__main__":
     try:

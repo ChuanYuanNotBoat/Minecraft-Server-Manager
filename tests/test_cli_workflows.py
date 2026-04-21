@@ -8,6 +8,7 @@ from msm.cli import crud_command_dispatcher
 from msm.cli import command_handler
 from msm.cli import exact_command_dispatcher
 from msm.cli import list_workflow
+from msm.cli import main_loop
 from msm.cli import monitor_workflow
 from msm.cli import pagination_workflow
 from msm.cli import prefix_command_dispatcher
@@ -294,6 +295,17 @@ class TestSessionWorkflow(unittest.TestCase):
         with patch("builtins.input", return_value=" H "):
             cmd = session_workflow.read_normalized_command(m, FakeColors)
         self.assertEqual(cmd, "h")
+
+
+class TestMainLoop(unittest.TestCase):
+    def test_stops_when_handler_requests_exit(self):
+        m = FakeManager()
+        handler = MagicMock(side_effect=[False, True])
+        with patch("msm.cli.main_loop.render_current_page"), patch(
+            "msm.cli.main_loop.read_normalized_command", side_effect=["n", "q"]
+        ):
+            main_loop.run_main_loop(m, FakeColors, FakePing, lambda _: None, handler)
+        self.assertEqual(handler.call_count, 2)
 
 
 if __name__ == "__main__":

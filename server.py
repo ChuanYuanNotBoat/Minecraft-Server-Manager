@@ -6,7 +6,6 @@ import time
 import select
 import sys
 import threading
-import signal
 import re
 from datetime import datetime
 import queue
@@ -23,9 +22,8 @@ from msm.constants import (
 from msm.help_text import print_help as print_common_help
 from msm.dns_utils import DNSUtils
 from msm.json_store import load_json_file, save_json_file
+from msm.cli.app_entry import run_cli_app
 from msm.cli.command_handler import handle_command
-from msm.cli.main_loop import run_main_loop
-from msm.cli.session_workflow import print_startup_banner
 
 # 全局变量
 global_cancel_query = False
@@ -1441,21 +1439,14 @@ class ServerManager:
 def print_help(manager):
     return print_common_help(manager, Colors)
 
-def sigint_handler(signum, frame):
-    """处理 Ctrl+C 信号"""
-    global global_cancel_query
 
+def on_sigint_cancel():
+    global global_cancel_query
     global_cancel_query = True
-    print(f"\n{Colors.YELLOW}正在取消查询...{Colors.RESET}")
 
 def main():
-    # 设置信号处理
-    signal.signal(signal.SIGINT, sigint_handler)
-
     manager = ServerManager()
-
-    print_startup_banner(manager, Colors)
-    run_main_loop(manager, Colors, MinecraftPing, print_help, handle_command)
+    run_cli_app(manager, Colors, MinecraftPing, print_help, handle_command, on_sigint_cancel)
 
 if __name__ == "__main__":
     try:

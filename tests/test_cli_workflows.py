@@ -16,6 +16,7 @@ from msm.cli import query_workflow
 from msm.cli import scan_workflow
 from msm.cli import session_workflow
 from msm.cli import server_crud_workflow
+from msm.cli import app_entry
 
 
 class FakeColors:
@@ -295,6 +296,30 @@ class TestSessionWorkflow(unittest.TestCase):
         with patch("builtins.input", return_value=" H "):
             cmd = session_workflow.read_normalized_command(m, FakeColors)
         self.assertEqual(cmd, "h")
+
+
+class TestAppEntry(unittest.TestCase):
+    def test_install_sigint_handler_calls_cancel_callback(self):
+        called = {"v": False}
+
+        def _cancel():
+            called["v"] = True
+
+        with patch("msm.cli.app_entry.signal.signal") as signal_mock:
+            app_entry.install_sigint_handler(_cancel, FakeColors)
+        handler = signal_mock.call_args.args[1]
+        handler(None, None)
+        self.assertTrue(called["v"])
+
+    def test_run_cli_app_orchestrates_startup_and_loop(self):
+        m = FakeManager()
+        with patch("msm.cli.app_entry.install_sigint_handler") as install_mock, patch(
+            "msm.cli.app_entry.print_startup_banner"
+        ) as banner_mock, patch("msm.cli.app_entry.run_main_loop") as loop_mock:
+            app_entry.run_cli_app(m, FakeColors, FakePing, lambda _: None, lambda *args: False, lambda: None)
+        install_mock.assert_called_once()
+        banner_mock.assert_called_once_with(m, FakeColors)
+        loop_mock.assert_called_once()
 
 
 class TestMainLoop(unittest.TestCase):

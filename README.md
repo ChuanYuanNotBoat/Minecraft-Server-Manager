@@ -115,6 +115,7 @@ Minecraft-Server-Manager/
 ?       ??? command_handler.py
 ?       ??? session_workflow.py
 ?       ??? main_loop.py
+?       ??? app_entry.py
 ??? servers.json       # Server list data (auto-generated)
 ??? config.json        # Config file (auto-generated)
 ??? requirements.txt   # Python dependencies

@@ -1477,8 +1477,6 @@ def main():
             Colors,
             MinecraftPing,
             print_help,
-            SERVER_TYPE_JAVA,
-            SERVER_TYPE_BEDROCK,
         )
         if should_exit:
             break

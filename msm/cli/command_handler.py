@@ -9,8 +9,6 @@ def handle_command(
     Colors,
     MinecraftPing,
     print_help,
-    SERVER_TYPE_JAVA,
-    SERVER_TYPE_BEDROCK,
 ):
     """Handle one normalized command.
 
@@ -23,14 +21,7 @@ def handle_command(
     if exact_result:
         return False
 
-    if dispatch_crud_command(
-        cmd,
-        manager,
-        Colors,
-        MinecraftPing,
-        SERVER_TYPE_JAVA,
-        SERVER_TYPE_BEDROCK,
-    ):
+    if dispatch_crud_command(cmd, manager, Colors, MinecraftPing):
         return False
 
     if dispatch_prefix_command(cmd, manager, Colors):

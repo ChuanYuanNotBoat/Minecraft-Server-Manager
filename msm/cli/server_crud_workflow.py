@@ -1,4 +1,7 @@
-def add_server_interactive(manager, Colors, MinecraftPing, SERVER_TYPE_JAVA, SERVER_TYPE_BEDROCK):
+from msm.constants import SERVER_TYPE_BEDROCK, SERVER_TYPE_JAVA
+
+
+def add_server_interactive(manager, Colors, MinecraftPing):
     """Interactive add-server workflow."""
     try:
         name = input("Server name: ").strip()

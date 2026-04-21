@@ -197,7 +197,7 @@ class TestServerCrudWorkflow(unittest.TestCase):
     def test_add_server_with_manual_port_and_type(self):
         m = FakeManager()
         with patch("builtins.input", side_effect=["S1", "127.0.0.1", "25570", "java", "n1"]):
-            server_crud_workflow.add_server_interactive(m, FakeColors, FakePing, "java", "bedrock")
+            server_crud_workflow.add_server_interactive(m, FakeColors, FakePing)
         self.assertIsNotNone(m.added_server)
         self.assertEqual(m.added_server["name"], "S1")
         self.assertEqual(m.added_server["port"], 25570)
@@ -247,13 +247,13 @@ class TestCrudCommandDispatcher(unittest.TestCase):
     def test_dispatch_add_command(self):
         m = FakeManager()
         with patch("msm.cli.crud_command_dispatcher.add_server_interactive") as mocked:
-            result = crud_command_dispatcher.dispatch_crud_command("a", m, FakeColors, FakePing, "java", "bedrock")
+            result = crud_command_dispatcher.dispatch_crud_command("a", m, FakeColors, FakePing)
         self.assertTrue(result)
         mocked.assert_called_once()
 
     def test_dispatch_unknown_crud_returns_false(self):
         m = FakeManager()
-        result = crud_command_dispatcher.dispatch_crud_command("x", m, FakeColors, FakePing, "java", "bedrock")
+        result = crud_command_dispatcher.dispatch_crud_command("x", m, FakeColors, FakePing)
         self.assertFalse(result)
 
 
@@ -261,7 +261,7 @@ class TestCommandHandler(unittest.TestCase):
     def test_returns_true_on_exit(self):
         m = FakeManager()
         with patch("msm.cli.command_handler.dispatch_exact_command", return_value="exit"):
-            result = command_handler.handle_command("q", m, FakeColors, FakePing, lambda _: None, "java", "bedrock")
+            result = command_handler.handle_command("q", m, FakeColors, FakePing, lambda _: None)
         self.assertTrue(result)
 
     def test_routes_unknown_to_message(self):
@@ -269,7 +269,7 @@ class TestCommandHandler(unittest.TestCase):
         with patch("msm.cli.command_handler.dispatch_exact_command", return_value=False), patch(
             "msm.cli.command_handler.dispatch_crud_command", return_value=False
         ), patch("msm.cli.command_handler.dispatch_prefix_command", return_value=False), patch("builtins.print") as p:
-            result = command_handler.handle_command("unknown", m, FakeColors, FakePing, lambda _: None, "java", "bedrock")
+            result = command_handler.handle_command("unknown", m, FakeColors, FakePing, lambda _: None)
         self.assertFalse(result)
         self.assertTrue(p.called)
 

@@ -46,6 +46,6 @@ def dispatch_exact_command(cmd, manager, Colors, MinecraftPing, print_help):
         print_help(manager)
         return True
     if cmd == "q":
-        print(f"{Colors.GREEN}再见!{Colors.RESET}")
+        print(f"{Colors.GREEN}Bye!{Colors.RESET}")
         return "exit"
     return False

@@ -36,5 +36,5 @@ def handle_command(
     if dispatch_prefix_command(cmd, manager, Colors):
         return False
 
-    print(f"{Colors.RED}未知命令 (输入'h'查看帮助){Colors.RESET}")
+    print(f"{Colors.RED}Unknown command (type 'h' for help){Colors.RESET}")
     return False

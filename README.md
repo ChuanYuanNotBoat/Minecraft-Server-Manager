@@ -110,6 +110,8 @@ Minecraft-Server-Manager/
 ?       ??? list_workflow.py
 ?       ??? server_crud_workflow.py
 ?       ??? exact_command_dispatcher.py
+?       ??? prefix_command_dispatcher.py
+?       ??? crud_command_dispatcher.py
 ??? servers.json       # Server list data (auto-generated)
 ??? config.json        # Config file (auto-generated)
 ??? requirements.txt   # Python dependencies

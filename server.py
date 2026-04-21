@@ -24,10 +24,9 @@ from msm.constants import (
 from msm.help_text import print_help as print_common_help
 from msm.dns_utils import DNSUtils
 from msm.json_store import load_json_file, save_json_file
+from msm.cli.crud_command_dispatcher import dispatch_crud_command
 from msm.cli.exact_command_dispatcher import dispatch_exact_command
-from msm.cli.monitor_workflow import run_monitor_workflow
-from msm.cli.query_workflow import run_info_workflow, run_players_workflow
-from msm.cli.server_crud_workflow import add_server_interactive, delete_server_interactive, update_server_interactive
+from msm.cli.prefix_command_dispatcher import dispatch_prefix_command
 
 # 全局变量
 global_cancel_query = False
@@ -1480,26 +1479,20 @@ def main():
         if exact_result:
             continue
 
-        if cmd == 'a':  # 添加服务器
-            add_server_interactive(
-                manager,
-                Colors,
-                MinecraftPing,
-                SERVER_TYPE_JAVA,
-                SERVER_TYPE_BEDROCK,
-            )
-        elif cmd == 'd':  # 删除服务器
-            delete_server_interactive(manager, Colors)
-        elif cmd == 'u':  # 更新服务器
-            update_server_interactive(manager, Colors)
-        elif cmd.startswith('players '):  # players list
-            run_players_workflow(cmd.split(), manager, Colors)
-        elif cmd.startswith('info '):  # server details
-            run_info_workflow(cmd.split(), manager, Colors)
-        elif cmd.startswith('monitor '):  # monitor servers
-            run_monitor_workflow(cmd.split(), manager, Colors)
-        else:
-            print(f"{Colors.RED}未知命令 (输入'h'查看帮助){Colors.RESET}")
+        if dispatch_crud_command(
+            cmd,
+            manager,
+            Colors,
+            MinecraftPing,
+            SERVER_TYPE_JAVA,
+            SERVER_TYPE_BEDROCK,
+        ):
+            continue
+
+        if dispatch_prefix_command(cmd, manager, Colors):
+            continue
+
+        print(f"{Colors.RED}未知命令 (输入'h'查看帮助){Colors.RESET}")
 
 if __name__ == "__main__":
     try:

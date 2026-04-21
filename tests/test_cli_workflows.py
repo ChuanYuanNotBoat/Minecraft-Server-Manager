@@ -4,10 +4,12 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from msm.cli import index_parser
+from msm.cli import crud_command_dispatcher
 from msm.cli import exact_command_dispatcher
 from msm.cli import list_workflow
 from msm.cli import monitor_workflow
 from msm.cli import pagination_workflow
+from msm.cli import prefix_command_dispatcher
 from msm.cli import query_workflow
 from msm.cli import scan_workflow
 from msm.cli import server_crud_workflow
@@ -223,6 +225,34 @@ class TestExactCommandDispatcher(unittest.TestCase):
     def test_dispatch_unknown_returns_false(self):
         m = FakeManager()
         result = exact_command_dispatcher.dispatch_exact_command("unknown", m, FakeColors, FakePing, lambda _: None)
+        self.assertFalse(result)
+
+
+class TestPrefixCommandDispatcher(unittest.TestCase):
+    def test_dispatch_players_prefix(self):
+        m = FakeManager()
+        with patch("msm.cli.prefix_command_dispatcher.run_players_workflow") as mocked:
+            result = prefix_command_dispatcher.dispatch_prefix_command("players 1", m, FakeColors)
+        self.assertTrue(result)
+        mocked.assert_called_once()
+
+    def test_dispatch_unknown_prefix_returns_false(self):
+        m = FakeManager()
+        result = prefix_command_dispatcher.dispatch_prefix_command("noop", m, FakeColors)
+        self.assertFalse(result)
+
+
+class TestCrudCommandDispatcher(unittest.TestCase):
+    def test_dispatch_add_command(self):
+        m = FakeManager()
+        with patch("msm.cli.crud_command_dispatcher.add_server_interactive") as mocked:
+            result = crud_command_dispatcher.dispatch_crud_command("a", m, FakeColors, FakePing, "java", "bedrock")
+        self.assertTrue(result)
+        mocked.assert_called_once()
+
+    def test_dispatch_unknown_crud_returns_false(self):
+        m = FakeManager()
+        result = crud_command_dispatcher.dispatch_crud_command("x", m, FakeColors, FakePing, "java", "bedrock")
         self.assertFalse(result)
 
 

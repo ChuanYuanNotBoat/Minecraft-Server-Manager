@@ -12,51 +12,19 @@ from datetime import datetime
 import queue
 from collections import deque
 
-# 配置文件路径
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-JSON_FILE = os.path.join(SCRIPT_DIR, "servers.json")
-CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
-
-# 检测操作系统并设置颜色支持
-IS_WINDOWS = os.name == 'nt'
-
+from msm.command_aliases import normalize_command
+from msm.constants import (
+    CONFIG_FILE,
+    JSON_FILE,
+    SERVER_TYPE_BEDROCK,
+    SERVER_TYPE_JAVA,
+    SERVER_TYPE_UNKNOWN,
+    Colors,
+)
+from msm.help_text import print_help as print_common_help
 
 # 全局变量
 global_cancel_query = False
-
-# 服务器类型常量
-SERVER_TYPE_JAVA = "java"
-SERVER_TYPE_BEDROCK = "bedrock"
-SERVER_TYPE_UNKNOWN = "unknown"
-
-# ANSI 颜色代码
-class Colors:
-    if IS_WINDOWS:
-        os.system('')  # 启用Windows 10+的ANSI转义序列支持
-
-    BLACK = '\033[30m'
-    RED = '\033[91m'
-    GREEN = '\033[92m'
-    YELLOW = '\033[93m'
-    BLUE = '\033[94m'
-    MAGENTA = '\033[95m'
-    CYAN = '\033[96m'
-    WHITE = '\033[97m'
-    RESET = '\033[0m'
-    BOLD = '\033[1m'
-    UNDERLINE = '\033[4m'
-    ITALIC = '\033[3m'
-    STRIKETHROUGH = '\033[9m'
-
-    # 背景色
-    BG_BLACK = '\033[40m'
-    BG_RED = '\033[41m'
-    BG_GREEN = '\033[42m'
-    BG_YELLOW = '\033[43m'
-    BG_BLUE = '\033[44m'
-    BG_MAGENTA = '\033[45m'
-    BG_CYAN = '\033[46m'
-    BG_WHITE = '\033[47m'
 
 # 导入监控模块
 try:
@@ -1559,40 +1527,7 @@ class ServerManager:
             return None
 
 def print_help(manager):
-    """打印帮助信息"""
-    print(f"\n{Colors.BOLD}可用命令:{Colors.RESET}")
-    print(f"  {Colors.GREEN}n / next{Colors.RESET}: ???")
-    print(f"  {Colors.GREEN}p / prev{Colors.RESET}: ???")
-    print(f"  {Colors.GREEN}g / goto{Colors.RESET}: ??????")
-    print(f"  {Colors.GREEN}a / add{Colors.RESET}: ?????")
-    print(f"  {Colors.GREEN}d / delete{Colors.RESET}: ?????")
-    print(f"  {Colors.GREEN}u / update{Colors.RESET}: ???????")
-    print(f"  {Colors.GREEN}s / save{Colors.RESET}: ???????")
-    print(f"  {Colors.GREEN}r / refresh{Colors.RESET}: ?????")
-    print(f"  {Colors.GREEN}clear / clearcache{Colors.RESET}: ????????")
-    print(f"  {Colors.GREEN}o / sort{Colors.RESET}: ?????")
-    print(f"  {Colors.GREEN}c / pagesize{Colors.RESET}: ???????? (??: {manager.page_size})")
-    print(f"  {Colors.GREEN}f / filter{Colors.RESET}: ???????")
-    print(f"  {Colors.GREEN}players / player <??>{Colors.RESET}: ??????????????")
-    print(f"  {Colors.GREEN}info / detail <??>{Colors.RESET}: ????????????")
-    print(f"  {Colors.GREEN}monitor / mon <??>{Colors.RESET}: ????????????")
-    print(f"  {Colors.GREEN}monitor / mon <??1> <??2> ...{Colors.RESET}: ??????????????")
-    print(f"  {Colors.GREEN}scan / scancommon{Colors.RESET}: ??IP/????Minecraft?????")
-    print(f"  {Colors.GREEN}scanall / scanfull{Colors.RESET}: ??IP/????????(1-65535)")
-    print(f"  {Colors.GREEN}h / help{Colors.RESET}: ????")
-    print(f"  {Colors.GREEN}q / quit{Colors.RESET}: ??")
-
-    # 监控功能说明
-    print(f"\n{Colors.BOLD}监控功能说明:{Colors.RESET}")
-    print(f"  • 实时监控服务器状态变化")
-    print(f"  • 检测玩家加入/退出事件和玩家数量变化")
-    print(f"  • 按 '+' 增加刷新间隔，'-' 减少刷新间隔")
-    print(f"  • 按 'r' 手动刷新，'t' 切换事件排序方式")
-    print(f"  • 按 'l' 查看完整日志，支持滚动和导出")
-    print(f"  • 按 'q' 或 Ctrl+C 退出监控模式")
-
-    # 等待用户按回车继续
-    input(f"\n{Colors.CYAN}按回车键继续...{Colors.RESET}")
+    return print_common_help(manager, Colors)
 
 def sigint_handler(signum, frame):
     """处理 Ctrl+C 信号"""
@@ -1621,34 +1556,9 @@ def main():
         except (KeyboardInterrupt, EOFError):
             print(f"\n{Colors.YELLOW}返回主菜单...{Colors.RESET}")
             continue
-
+        cmd = normalize_command(cmd)
         if not cmd:
             continue
-
-        cmd_parts = cmd.split()
-        cmd_aliases = {
-            'n': 'n', 'next': 'n',
-            'p': 'p', 'prev': 'p', 'previous': 'p',
-            'g': 'g', 'goto': 'g', 'page': 'g',
-            'a': 'a', 'add': 'a',
-            'd': 'd', 'delete': 'd', 'del': 'd', 'remove': 'd',
-            'u': 'u', 'update': 'u', 'edit': 'u',
-            's': 's', 'save': 's',
-            'r': 'r', 'refresh': 'r', 'reload': 'r',
-            'clear': 'clear', 'clearcache': 'clear',
-            'o': 'o', 'sort': 'o', 'order': 'o',
-            'c': 'c', 'pagesize': 'c', 'size': 'c',
-            'f': 'f', 'filter': 'f',
-            'players': 'players', 'player': 'players',
-            'info': 'info', 'detail': 'info',
-            'monitor': 'monitor', 'mon': 'monitor',
-            'scan': 'scan', 'scancommon': 'scan',
-            'scanall': 'scanall', 'scanfull': 'scanall',
-            'h': 'h', 'help': 'h',
-            'q': 'q', 'quit': 'q', 'exit': 'q',
-        }
-        cmd_parts[0] = cmd_aliases.get(cmd_parts[0], cmd_parts[0])
-        cmd = " ".join(cmd_parts)
 
         if cmd == 'n':  # 下一页
             if manager.current_page < manager.max_page():

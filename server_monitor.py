@@ -22,30 +22,13 @@ from collections import deque, defaultdict
 from datetime import datetime
 import select
 
-# ========== 独立定义常量，避免循环导入 ==========
-class Colors:
-    BLACK = '\033[30m'
-    RED = '\033[91m'
-    GREEN = '\033[92m'
-    YELLOW = '\033[93m'
-    BLUE = '\033[94m'
-    MAGENTA = '\033[95m'
-    CYAN = '\033[96m'
-    WHITE = '\033[97m'
-    RESET = '\033[0m'
-    BOLD = '\033[1m'
-    UNDERLINE = '\033[4m'
-    ITALIC = '\033[3m'
-    STRIKETHROUGH = '\033[9m'
-
-SERVER_TYPE_JAVA = "java"
-SERVER_TYPE_BEDROCK = "bedrock"
+from msm.constants import Colors, LOGS_DIR as DEFAULT_LOGS_DIR, SERVER_TYPE_BEDROCK, SERVER_TYPE_JAVA
 
 # ========== 日志记录器类 ==========
 class MonitorLogger:
     """监控日志记录器"""
     
-    LOGS_DIR = "logs"
+    LOGS_DIR = DEFAULT_LOGS_DIR
     MAX_LOG_FILES = 50  # 最大日志文件数量
     
     @staticmethod

@@ -95,6 +95,10 @@ Minecraft-Server-Manager/
 ├── server.py          # 主管理程序
 ├── server_monitor.py  # 服务器监控模块
 ├── server_info.py     # 服务器查询核心模块（可选）
+├── msm/               # 公共模块（常量、命令别名、帮助文本）
+│   ├── constants.py
+│   ├── command_aliases.py
+│   └── help_text.py
 ├── servers.json       # 服务器列表数据（自动生成）
 ├── config.json        # 配置文件（自动生成）
 ├── requirements.txt   # Python依赖项

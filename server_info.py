@@ -19,6 +19,8 @@ import tkinter as tk
 from tkinter import filedialog
 import zipfile
 
+from msm.constants import PROJECT_ROOT
+
 # 调试模式开关
 DEBUG_MODE = True
 
@@ -28,7 +30,7 @@ if DEBUG_MODE:
     print("调试模式已启用")
 
 # 协议版本文件路径
-PROTOCOL_VERSIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "protocol_versions.json")
+PROTOCOL_VERSIONS_FILE = os.path.join(PROJECT_ROOT, "protocol_versions.json")
 
 # 尝试从外部文件加载协议版本
 PROTOCOL_VERSIONS = {}

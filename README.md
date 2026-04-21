@@ -146,3 +146,12 @@ Minecraft-Server-Manager/
 ## 未来计划
 
 计划在未来版本中集成对 [Minecraft-Console-Client](https://github.com/MCCTeam/Minecraft-Console-Client) 的可选调用支持，以替代当前实验性的聊天功能和其他未实现的客户端功能。这将提供更稳定和功能完整的 Minecraft 客户端集成体验。
+
+
+## Quick Tests
+
+Run fast module-level tests for CLI workflows:
+
+```bash
+python -m unittest discover -s tests -p "test_*.py" -v
+```

@@ -112,6 +112,7 @@ Minecraft-Server-Manager/
 ?       ??? exact_command_dispatcher.py
 ?       ??? prefix_command_dispatcher.py
 ?       ??? crud_command_dispatcher.py
+?       ??? command_handler.py
 ??? servers.json       # Server list data (auto-generated)
 ??? config.json        # Config file (auto-generated)
 ??? requirements.txt   # Python dependencies

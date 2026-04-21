@@ -24,9 +24,7 @@ from msm.constants import (
 from msm.help_text import print_help as print_common_help
 from msm.dns_utils import DNSUtils
 from msm.json_store import load_json_file, save_json_file
-from msm.cli.crud_command_dispatcher import dispatch_crud_command
-from msm.cli.exact_command_dispatcher import dispatch_exact_command
-from msm.cli.prefix_command_dispatcher import dispatch_prefix_command
+from msm.cli.command_handler import handle_command
 
 # 全局变量
 global_cancel_query = False
@@ -1473,26 +1471,17 @@ def main():
         if not cmd:
             continue
 
-        exact_result = dispatch_exact_command(cmd, manager, Colors, MinecraftPing, print_help)
-        if exact_result == "exit":
-            break
-        if exact_result:
-            continue
-
-        if dispatch_crud_command(
+        should_exit = handle_command(
             cmd,
             manager,
             Colors,
             MinecraftPing,
+            print_help,
             SERVER_TYPE_JAVA,
             SERVER_TYPE_BEDROCK,
-        ):
-            continue
-
-        if dispatch_prefix_command(cmd, manager, Colors):
-            continue
-
-        print(f"{Colors.RED}未知命令 (输入'h'查看帮助){Colors.RESET}")
+        )
+        if should_exit:
+            break
 
 if __name__ == "__main__":
     try:

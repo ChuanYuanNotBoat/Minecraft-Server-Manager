@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 from msm.cli import index_parser
 from msm.cli import crud_command_dispatcher
+from msm.cli import command_handler
 from msm.cli import exact_command_dispatcher
 from msm.cli import list_workflow
 from msm.cli import monitor_workflow
@@ -254,6 +255,23 @@ class TestCrudCommandDispatcher(unittest.TestCase):
         m = FakeManager()
         result = crud_command_dispatcher.dispatch_crud_command("x", m, FakeColors, FakePing, "java", "bedrock")
         self.assertFalse(result)
+
+
+class TestCommandHandler(unittest.TestCase):
+    def test_returns_true_on_exit(self):
+        m = FakeManager()
+        with patch("msm.cli.command_handler.dispatch_exact_command", return_value="exit"):
+            result = command_handler.handle_command("q", m, FakeColors, FakePing, lambda _: None, "java", "bedrock")
+        self.assertTrue(result)
+
+    def test_routes_unknown_to_message(self):
+        m = FakeManager()
+        with patch("msm.cli.command_handler.dispatch_exact_command", return_value=False), patch(
+            "msm.cli.command_handler.dispatch_crud_command", return_value=False
+        ), patch("msm.cli.command_handler.dispatch_prefix_command", return_value=False), patch("builtins.print") as p:
+            result = command_handler.handle_command("unknown", m, FakeColors, FakePing, lambda _: None, "java", "bedrock")
+        self.assertFalse(result)
+        self.assertTrue(p.called)
 
 
 if __name__ == "__main__":
